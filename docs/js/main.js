@@ -1,5 +1,5 @@
 // ARGUS Website Configuration
-const ARGUS_DOWNLOAD_URL = "https://github.com/AngKool-Dev/argus-releases/releases/latest/download/era-launcher.exe";
+const ARGUS_DOWNLOAD_URL = "https://github.com/AngKool-Dev/argus-releases/releases/download/v0.1.10/era-launcher.exe";
 
 const RELEASES_API = "https://api.github.com/repos/AngKool-Dev/argus-releases/releases?per_page=100";
 const LATEST_RELEASE_API = "https://api.github.com/repos/AngKool-Dev/argus-releases/releases/latest";
