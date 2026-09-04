@@ -86,10 +86,20 @@ impl JavaManager {
 
     pub fn cleanup_old_managed_javas(min_major: u32) -> Result<Vec<String>> {
         let mut removed = Vec::new();
-        if let Some(data_local) = std::env::var_os("LOCALAPPDATA") {
-            let base = PathBuf::from(data_local)
-                .join("EraLauncher")
-                .join("runtimes");
+        let base = if cfg!(windows) {
+            std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .map(|p| p.join("EraLauncher").join("runtimes"))
+        } else {
+            std::env::var_os("HOME").map(|h| {
+                PathBuf::from(h)
+                    .join(".local")
+                    .join("share")
+                    .join("EraLauncher")
+                    .join("runtimes")
+            })
+        };
+        if let Some(base) = base {
             if let Ok(entries) = std::fs::read_dir(&base) {
                 for entry in entries.flatten() {
                     let java_exe = entry.path().join("bin").join(if cfg!(windows) {
@@ -103,7 +113,7 @@ impl JavaManager {
                     if let Ok(output) = Self::run_java_version(&java_exe) {
                         if let Some(version) = JavaVersion::parse_output(&java_exe, &output) {
                             if version.major < min_major {
-                                let _ = std::fs::remove_dir_all(&entry.path());
+                                let _ = std::fs::remove_dir_all(entry.path());
                                 removed.push(entry.path().to_string_lossy().to_string());
                             }
                         }
@@ -185,6 +195,17 @@ impl JavaManager {
                     }
                 }
             }
+        } else {
+            // Linux/macOS: walk the standard JVM install roots that Debian,
+            // Ubuntu, Fedora, and Homebrew use.
+            for base in ["/usr/lib/jvm", "/usr/lib64/jvm", "/opt/homebrew/opt", "/opt/local"] {
+                if let Ok(entries) = std::fs::read_dir(base) {
+                    for entry in entries.flatten() {
+                        let p = entry.path().join("bin").join(bin_name);
+                        paths.push(p);
+                    }
+                }
+            }
         }
 
         paths
@@ -194,10 +215,23 @@ impl JavaManager {
         let mut paths = Vec::new();
         let bin_name = if cfg!(windows) { "javaw.exe" } else { "java" };
 
-        if let Some(data_local) = std::env::var_os("LOCALAPPDATA") {
-            let base = PathBuf::from(data_local)
-                .join("EraLauncher")
-                .join("runtimes");
+        // Windows uses LOCALAPPDATA, XDG-compliant Linux/macOS use
+        // ~/.local/share. Both should agree with what `installer::install_java`
+        // writes, so detection stays in lock-step with provisioning.
+        let base = if cfg!(windows) {
+            std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .map(|p| p.join("EraLauncher").join("runtimes"))
+        } else {
+            std::env::var_os("HOME").map(|h| {
+                PathBuf::from(h)
+                    .join(".local")
+                    .join("share")
+                    .join("EraLauncher")
+                    .join("runtimes")
+            })
+        };
+        if let Some(base) = base {
             if let Ok(entries) = std::fs::read_dir(base) {
                 for entry in entries.flatten() {
                     let path = entry.path().join("bin").join(bin_name);
@@ -329,34 +363,55 @@ mod tests {
     #[test]
     fn test_managed_candidate_paths_uses_localappdata() {
         let temp = std::env::temp_dir().join(format!("era-test-managed-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(
+        let bin = if cfg!(windows) {
             temp.join("EraLauncher")
                 .join("runtimes")
                 .join("java21")
-                .join("bin"),
-        );
-        unsafe {
-            std::env::set_var("LOCALAPPDATA", &temp);
+                .join("bin")
+        } else {
+            temp.join(".local")
+                .join("share")
+                .join("EraLauncher")
+                .join("runtimes")
+                .join("java21")
+                .join("bin")
+        };
+        let _ = std::fs::create_dir_all(&bin);
+        if cfg!(windows) {
+            unsafe {
+                std::env::set_var("LOCALAPPDATA", &temp);
+            }
+        } else {
+            unsafe {
+                std::env::set_var("HOME", &temp);
+            }
         }
         let paths = JavaManager::managed_candidate_paths();
         assert!(paths.len() >= 1);
-        let expected = temp
-            .join("EraLauncher")
-            .join("runtimes")
-            .join("java21")
-            .join("bin")
-            .join(if cfg!(windows) { "javaw.exe" } else { "java" });
+        let expected = bin.join(if cfg!(windows) { "javaw.exe" } else { "java" });
         assert!(paths.contains(&expected));
-        unsafe {
-            std::env::remove_var("LOCALAPPDATA");
+        if cfg!(windows) {
+            unsafe {
+                std::env::remove_var("LOCALAPPDATA");
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
         }
         let _ = std::fs::remove_dir_all(temp);
     }
 
     #[test]
     fn test_managed_candidate_paths_ignores_empty_localappdata() {
-        unsafe {
-            std::env::remove_var("LOCALAPPDATA");
+        if cfg!(windows) {
+            unsafe {
+                std::env::remove_var("LOCALAPPDATA");
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
         }
         let paths = JavaManager::managed_candidate_paths();
         assert!(paths.is_empty());
@@ -366,13 +421,25 @@ mod tests {
     fn test_managed_candidate_paths_skips_missing_directory() {
         let temp =
             std::env::temp_dir().join(format!("era-test-managed-missing-{}", std::process::id()));
-        unsafe {
-            std::env::set_var("LOCALAPPDATA", &temp);
+        if cfg!(windows) {
+            unsafe {
+                std::env::set_var("LOCALAPPDATA", &temp);
+            }
+        } else {
+            unsafe {
+                std::env::set_var("HOME", &temp);
+            }
         }
         let paths = JavaManager::managed_candidate_paths();
         assert!(paths.is_empty());
-        unsafe {
-            std::env::remove_var("LOCALAPPDATA");
+        if cfg!(windows) {
+            unsafe {
+                std::env::remove_var("LOCALAPPDATA");
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
         }
         let _ = std::fs::remove_dir_all(temp);
     }

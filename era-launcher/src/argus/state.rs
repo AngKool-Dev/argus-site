@@ -6,6 +6,7 @@ use crate::instances::InstanceConfig;
 use crate::minecraft::java::JavaInstallation;
 use crate::minecraft::optimization::OptimizationProfile;
 use crate::modrinth::Project;
+use crate::servers::{PingInfo, ServerEntry};
 use crate::versions::ScanResult;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -18,24 +19,22 @@ pub enum Section {
     Instances,
     Mods,
     Worlds,
+    Servers,
     Logs,
     Crashes,
+    Screenshots,
     Settings,
 }
 
 /// Sub-tabs within the Discover section
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum DiscoverTab {
+    #[default]
     Mods,
     Modpacks,
     Shaders,
     ResourcePacks,
-}
-
-impl Default for DiscoverTab {
-    fn default() -> Self {
-        Self::Mods
-    }
 }
 
 impl DiscoverTab {
@@ -66,8 +65,10 @@ impl Section {
             Section::Instances => "INSTANCES",
             Section::Mods => "MODS",
             Section::Worlds => "WORLDS",
+            Section::Servers => "SERVERS",
             Section::Logs => "LOGS",
             Section::Crashes => "CRASHES",
+            Section::Screenshots => "SCREENSHOTS",
             Section::Settings => "SETTINGS",
         }
     }
@@ -79,8 +80,10 @@ impl Section {
             Section::Instances,
             Section::Mods,
             Section::Worlds,
+            Section::Servers,
             Section::Logs,
             Section::Crashes,
+            Section::Screenshots,
             Section::Settings,
         ]
     }
@@ -233,6 +236,42 @@ pub struct CrashReport {
     pub summary: String,
 }
 
+/// A screenshot on disk, surfaced in the SCREENSHOTS section.
+#[derive(Debug, Clone)]
+pub struct ScreenshotEntry {
+    pub path: PathBuf,
+    pub mtime: String,
+    pub size_bytes: u64,
+}
+
+/// A diagnostic hint produced by `crashes::diagnose`.
+#[derive(Debug, Clone)]
+pub enum DiagnosticHint {
+    MissingMod(String),
+    ModVersionMismatch { mod_id: String, expected: String, got: String },
+    NoClassDefFound(String),
+    InsufficientMemory,
+    JavaVersion(String),
+    Unknown,
+}
+
+impl DiagnosticHint {
+    pub fn label(&self) -> String {
+        match self {
+            DiagnosticHint::MissingMod(cls) => format!("Missing mod — class {}", cls),
+            DiagnosticHint::ModVersionMismatch { mod_id, .. } => {
+                format!("Mod version mismatch on {}", mod_id)
+            }
+            DiagnosticHint::NoClassDefFound(cls) => {
+                format!("NoClassDefFoundError on {}", cls)
+            }
+            DiagnosticHint::InsufficientMemory => "Out of memory — raise RAM in Settings".to_string(),
+            DiagnosticHint::JavaVersion(v) => format!("Java version mismatch — got {}", v),
+            DiagnosticHint::Unknown => "Unknown crash".to_string(),
+        }
+    }
+}
+
 /// Loader choices offered when creating an instance: (id, description).
 pub const CREATE_LOADERS: &[(&str, &str)] = &[
     ("vanilla", "Official Minecraft — no mods"),
@@ -322,8 +361,28 @@ pub struct AppState {
     pub updatable_mods: Vec<UpdatableMod>,
     /// JVM crash reports found for the selected instance
     pub crash_reports: Vec<CrashReport>,
+    /// Diagnostic hints derived from the selected crash report
+    pub crash_diagnostics: Vec<DiagnosticHint>,
     /// Worlds found in the selected instance's saves directory
     pub worlds: Vec<String>,
+    /// Screenshots for the selected instance (vanilla `screenshots/` dir)
+    pub screenshots: Vec<ScreenshotEntry>,
+    /// User-added multiplayer servers
+    pub servers: Vec<ServerEntry>,
+    /// Most recent ping info per server, indexed by server id
+    pub server_pings: std::collections::HashMap<String, PingInfo>,
+    /// Whether the "Add server" overlay is open
+    pub server_add_open: bool,
+    /// Buffer for new-server name (overlay)
+    pub server_add_name: String,
+    /// Buffer for new-server address (overlay)
+    pub server_add_address: String,
+    /// True while a ping is in flight (so the button shows "Pinging…")
+    pub server_pinging: bool,
+    /// Whether the live log tail view is currently shown (Shift+L toggle)
+    pub live_log_view: bool,
+    /// Cached path to the live log file (set when Minecraft starts)
+    pub live_log_path: Option<PathBuf>,
     /// System scan results
     pub scan_results: Vec<ScanResult>,
     /// Log entries
@@ -436,7 +495,17 @@ impl AppState {
             installed_content: Vec::new(),
             updatable_mods: Vec::new(),
             crash_reports: Vec::new(),
+            crash_diagnostics: Vec::new(),
             worlds: Vec::new(),
+            screenshots: Vec::new(),
+            servers: Vec::new(),
+            server_pings: std::collections::HashMap::new(),
+            server_add_open: false,
+            server_add_name: String::new(),
+            server_add_address: String::new(),
+            server_pinging: false,
+            live_log_view: false,
+            live_log_path: None,
             scan_results: Vec::new(),
             logs: VecDeque::with_capacity(1000),
             command_history: VecDeque::with_capacity(100),
@@ -458,6 +527,8 @@ impl AppState {
                 "dark".to_string(),
                 "light".to_string(),
                 "system".to_string(),
+                "dracula".to_string(),
+                "tokyo-night".to_string(),
             ],
             update_check: UpdateCheckResult::UpToDate,
             last_update_check: None,
@@ -597,7 +668,10 @@ impl AppState {
             Section::Instances,
             Section::Mods,
             Section::Worlds,
+            Section::Servers,
             Section::Logs,
+            Section::Crashes,
+            Section::Screenshots,
             Section::Settings,
         ]
     }
@@ -773,7 +847,7 @@ mod tests {
     #[test]
     fn test_sections_count() {
         let sections = AppState::sections();
-        assert_eq!(sections.len(), 7);
+        assert_eq!(sections.len(), 10);
     }
 
     #[test]

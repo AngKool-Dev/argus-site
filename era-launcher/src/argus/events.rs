@@ -111,7 +111,7 @@ impl InputProcessor {
         match kind {
             MouseEventKind::Down(button) => {
                 let _ = button; // We handle all button types the same for now
-                Some(ArgusEvent::MouseClick { row: row, col: col })
+                Some(ArgusEvent::MouseClick { row, col })
             }
             _ => None,
         }

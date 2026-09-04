@@ -1,17 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OptimizationProfile {
     Low,
+    #[default]
     Mid,
     High,
     Custom,
-}
-
-impl Default for OptimizationProfile {
-    fn default() -> Self {
-        OptimizationProfile::Mid
-    }
 }
 
 impl OptimizationProfile {
@@ -34,10 +29,10 @@ impl OptimizationProfile {
     }
 
     pub fn jvm_args(&self, memory_mb: u32) -> Vec<String> {
-        let args = match self {
+        match self {
             OptimizationProfile::Low => vec![
                 format!("-Xmx{}M", (memory_mb * 3 / 4).max(2048)),
-                format!("-Xms{}M", (memory_mb / 8).max(512).min(1024)),
+                format!("-Xms{}M", (memory_mb / 8).clamp(512, 1024)),
                 "-XX:+UseG1GC".to_string(),
                 "-XX:+UnlockExperimentalVMOptions".to_string(),
                 "-XX:G1NewSizePercent=20".to_string(),
@@ -53,7 +48,7 @@ impl OptimizationProfile {
             ],
             OptimizationProfile::Mid => vec![
                 format!("-Xmx{}M", (memory_mb * 3 / 4).max(4096)),
-                format!("-Xms{}M", (memory_mb / 4).max(1024).min(2048)),
+                format!("-Xms{}M", (memory_mb / 4).clamp(1024, 2048)),
                 "-XX:+UseG1GC".to_string(),
                 "-XX:+UnlockExperimentalVMOptions".to_string(),
                 "-XX:G1NewSizePercent=20".to_string(),
@@ -66,7 +61,7 @@ impl OptimizationProfile {
             ],
             OptimizationProfile::High => vec![
                 format!("-Xmx{}M", (memory_mb * 7 / 8).max(8192)),
-                format!("-Xms{}M", (memory_mb / 4).max(2048).min(4096)),
+                format!("-Xms{}M", (memory_mb / 4).clamp(2048, 4096)),
                 "-XX:+UseG1GC".to_string(),
                 "-XX:+UnlockExperimentalVMOptions".to_string(),
                 "-XX:G1NewSizePercent=20".to_string(),
@@ -80,9 +75,7 @@ impl OptimizationProfile {
                 "-XX:+UseCompressedClassPointers".to_string(),
             ],
             OptimizationProfile::Custom => vec![],
-        };
-
-        args
+        }
     }
 
     pub fn description(&self) -> &'static str {

@@ -1,6 +1,6 @@
 [package]
 name = "era-launcher"
-version = "0.1.11"
+version = "0.1.12"
 description = "A modern Minecraft launcher"
 authors = ["Angkool-Dev"]
 edition = "2024"
@@ -39,6 +39,7 @@ tar = "0.4"
 crossterm = "0.29"
 ratatui = "0.30"
 clap = { version = "4", features = ["derive"] }
+arboard = { version = "3", default-features = false }
 
 md-5 = "0.10"
 http = "1"

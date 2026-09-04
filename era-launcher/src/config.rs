@@ -19,7 +19,7 @@ impl Default for Settings {
         Self {
             default_memory: 4096,
             java_path: None,
-            theme: "dark".to_string(),
+            theme: "tokyo-night".to_string(),
             language: "en".to_string(),
             optimization_profile: OptimizationProfile::Mid,
             custom_jvm_args: Vec::new(),

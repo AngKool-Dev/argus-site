@@ -15,76 +15,157 @@ pub struct Theme {
     pub name: &'static str,
     pub bg: Color,
     pub bg_dark: Color,
-    pub panel: Color,
+    pub bg_panel: Color,
+    pub bg_filled: Color,
     pub border: Color,
     pub border_focus: Color,
+    pub border_dim: Color,
     pub accent: Color,
     pub accent_dim: Color,
+    pub accent_fade: Color,
     pub text: Color,
     pub text_dim: Color,
     pub text_muted: Color,
+    pub text_subtle: Color,
     pub success: Color,
     pub warning: Color,
     pub error: Color,
     pub info: Color,
     pub focus: Color,
+    pub selection: Color,
     pub fabric: Color,
     pub forge: Color,
     pub vanilla: Color,
+    pub divider: Color,
 }
 
 impl Theme {
-    /// SKlauncher-inspired dark palette (original look).
+    /// Deep dark palette with cyan-teal accents and subtle gradients.
     pub const DARK: Theme = Theme {
         name: "dark",
-        bg: Color::Rgb(15, 15, 23),
-        bg_dark: Color::Rgb(10, 10, 18),
-        panel: Color::Rgb(25, 25, 35),
-        border: Color::Rgb(60, 60, 80),
-        border_focus: Color::Rgb(80, 200, 120),
-        accent: Color::Rgb(80, 200, 120),
-        accent_dim: Color::Rgb(60, 160, 100),
-        text: Color::Rgb(220, 220, 220),
-        text_dim: Color::Rgb(120, 120, 140),
-        text_muted: Color::Rgb(90, 90, 110),
-        success: Color::Rgb(80, 200, 120),
-        warning: Color::Rgb(255, 200, 80),
-        error: Color::Rgb(240, 80, 80),
-        info: Color::Rgb(100, 180, 240),
-        focus: Color::Rgb(100, 180, 255),
-        fabric: Color::Rgb(100, 120, 255),
-        forge: Color::Rgb(240, 120, 60),
-        vanilla: Color::Rgb(200, 200, 200),
+        bg: Color::Rgb(12, 12, 19),
+        bg_dark: Color::Rgb(8, 8, 14),
+        bg_panel: Color::Rgb(22, 22, 32),
+        bg_filled: Color::Rgb(18, 18, 27),
+        border: Color::Rgb(52, 52, 72),
+        border_focus: Color::Rgb(70, 200, 140),
+        border_dim: Color::Rgb(34, 34, 50),
+        accent: Color::Rgb(70, 200, 140),
+        accent_dim: Color::Rgb(55, 165, 120),
+        accent_fade: Color::Rgb(35, 110, 85),
+        text: Color::Rgb(225, 225, 235),
+        text_dim: Color::Rgb(150, 150, 170),
+        text_muted: Color::Rgb(100, 100, 120),
+        text_subtle: Color::Rgb(70, 70, 90),
+        success: Color::Rgb(70, 200, 140),
+        warning: Color::Rgb(255, 195, 70),
+        error: Color::Rgb(245, 90, 90),
+        info: Color::Rgb(90, 175, 245),
+        focus: Color::Rgb(100, 190, 255),
+        selection: Color::Rgb(28, 28, 40),
+        fabric: Color::Rgb(110, 130, 255),
+        forge: Color::Rgb(245, 125, 60),
+        vanilla: Color::Rgb(210, 210, 220),
+        divider: Color::Rgb(38, 38, 55),
     };
 
     /// Light palette — same structure, readable on bright terminals.
     pub const LIGHT: Theme = Theme {
         name: "light",
-        bg: Color::Rgb(243, 243, 246),
-        bg_dark: Color::Rgb(228, 228, 233),
-        panel: Color::Rgb(255, 255, 255),
-        border: Color::Rgb(185, 185, 198),
+        bg: Color::Rgb(245, 245, 248),
+        bg_dark: Color::Rgb(230, 230, 235),
+        bg_panel: Color::Rgb(255, 255, 255),
+        bg_filled: Color::Rgb(248, 248, 252),
+        border: Color::Rgb(205, 205, 215),
         border_focus: Color::Rgb(20, 140, 90),
+        border_dim: Color::Rgb(218, 218, 228),
         accent: Color::Rgb(16, 130, 84),
-        accent_dim: Color::Rgb(60, 160, 100),
-        text: Color::Rgb(30, 30, 40),
-        text_dim: Color::Rgb(95, 95, 110),
-        text_muted: Color::Rgb(130, 130, 145),
+        accent_dim: Color::Rgb(35, 120, 80),
+        accent_fade: Color::Rgb(210, 235, 225),
+        text: Color::Rgb(25, 25, 35),
+        text_dim: Color::Rgb(105, 105, 120),
+        text_muted: Color::Rgb(135, 135, 150),
+        text_subtle: Color::Rgb(175, 175, 188),
         success: Color::Rgb(16, 130, 84),
-        warning: Color::Rgb(170, 115, 0),
-        error: Color::Rgb(200, 40, 40),
-        info: Color::Rgb(20, 100, 200),
+        warning: Color::Rgb(180, 115, 0),
+        error: Color::Rgb(210, 45, 45),
+        info: Color::Rgb(25, 100, 200),
         focus: Color::Rgb(20, 90, 190),
-        fabric: Color::Rgb(70, 90, 210),
+        selection: Color::Rgb(235, 240, 238),
+        fabric: Color::Rgb(75, 95, 215),
         forge: Color::Rgb(200, 90, 30),
-        vanilla: Color::Rgb(80, 80, 90),
+        vanilla: Color::Rgb(75, 75, 85),
+        divider: Color::Rgb(218, 218, 228),
     };
 
-    /// Resolve a settings string ("dark" | "light" | "system") to a palette.
+    /// Dracula — deep navy with vibrant pastel accents. Minecraft green
+    /// reserved as the accent.
+    pub const DRACULA: Theme = Theme {
+        name: "dracula",
+        bg: Color::Rgb(40, 42, 54),
+        bg_dark: Color::Rgb(33, 34, 50),
+        bg_panel: Color::Rgb(56, 58, 84),
+        bg_filled: Color::Rgb(68, 71, 90),
+        border: Color::Rgb(98, 114, 164),
+        border_focus: Color::Rgb(139, 148, 255),
+        border_dim: Color::Rgb(73, 76, 102),
+        accent: Color::Rgb(80, 200, 120),
+        accent_dim: Color::Rgb(60, 160, 90),
+        accent_fade: Color::Rgb(40, 120, 70),
+        text: Color::Rgb(248, 248, 242),
+        text_dim: Color::Rgb(169, 183, 202),
+        text_muted: Color::Rgb(98, 114, 143),
+        text_subtle: Color::Rgb(66, 73, 92),
+        success: Color::Rgb(80, 200, 120),
+        warning: Color::Rgb(241, 250, 140),
+        error: Color::Rgb(255, 85, 85),
+        info: Color::Rgb(139, 148, 255),
+        focus: Color::Rgb(189, 147, 249),
+        selection: Color::Rgb(68, 71, 90),
+        fabric: Color::Rgb(114, 137, 218),
+        forge: Color::Rgb(255, 128, 64),
+        vanilla: Color::Rgb(189, 147, 249),
+        divider: Color::Rgb(74, 77, 92),
+    };
+
+    /// Tokyo Night (Night) — cool blue-grey with warm accents.
+    /// Minecraft green as accent.
+    pub const TOKYO_NIGHT: Theme = Theme {
+        name: "tokyo-night",
+        bg: Color::Rgb(26, 27, 39),
+        bg_dark: Color::Rgb(22, 23, 42),
+        bg_panel: Color::Rgb(41, 41, 74),
+        bg_filled: Color::Rgb(51, 52, 76),
+        border: Color::Rgb(86, 95, 137),
+        border_focus: Color::Rgb(114, 137, 218),
+        border_dim: Color::Rgb(60, 66, 102),
+        accent: Color::Rgb(80, 200, 120),
+        accent_dim: Color::Rgb(60, 160, 90),
+        accent_fade: Color::Rgb(40, 120, 70),
+        text: Color::Rgb(192, 202, 245),
+        text_dim: Color::Rgb(122, 129, 165),
+        text_muted: Color::Rgb(69, 71, 92),
+        text_subtle: Color::Rgb(48, 50, 65),
+        success: Color::Rgb(115, 215, 148),
+        warning: Color::Rgb(241, 187, 106),
+        error: Color::Rgb(247, 118, 141),
+        info: Color::Rgb(114, 137, 218),
+        focus: Color::Rgb(122, 170, 255),
+        selection: Color::Rgb(41, 41, 74),
+        fabric: Color::Rgb(114, 137, 218),
+        forge: Color::Rgb(255, 148, 76),
+        vanilla: Color::Rgb(192, 202, 245),
+        divider: Color::Rgb(51, 53, 72),
+    };
+
+    /// Resolve a settings string ("dark" | "light" | "system" |
+    /// "dracula" | "tokyo-night") to a palette.
     pub fn resolve(name: &str) -> Theme {
         match name.to_lowercase().as_str() {
             "light" => Theme::LIGHT,
             "system" => detect_system_theme(),
+            "dracula" => Theme::DRACULA,
+            "tokyo-night" | "tokyonight" | "tokyo night" => Theme::TOKYO_NIGHT,
             _ => Theme::DARK,
         }
     }
@@ -159,6 +240,19 @@ mod tests {
         assert_eq!(Theme::resolve("dark"), Theme::DARK);
         assert_eq!(Theme::resolve("unknown"), Theme::DARK);
         assert_eq!(Theme::resolve(""), Theme::DARK);
+    }
+
+    #[test]
+    fn test_resolve_dracula() {
+        assert_eq!(Theme::resolve("dracula"), Theme::DRACULA);
+        assert_eq!(Theme::resolve("Dracula"), Theme::DRACULA);
+    }
+
+    #[test]
+    fn test_resolve_tokyo_night() {
+        assert_eq!(Theme::resolve("tokyo-night"), Theme::TOKYO_NIGHT);
+        assert_eq!(Theme::resolve("tokyonight"), Theme::TOKYO_NIGHT);
+        assert_eq!(Theme::resolve("tokyo night"), Theme::TOKYO_NIGHT);
     }
 
     #[test]

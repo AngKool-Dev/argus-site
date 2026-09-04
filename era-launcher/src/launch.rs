@@ -415,7 +415,7 @@ impl LaunchEngine {
         }
 
         let dm = DownloadManager::new();
-        let stream = futures::stream::iter(download_tasks.into_iter())
+        let stream = futures::stream::iter(download_tasks)
             .map(|(url, path)| {
                 let dm = &dm;
                 let url = url.clone();
@@ -564,7 +564,7 @@ impl LaunchEngine {
         }
 
         let dm = DownloadManager::new();
-        let stream = futures::stream::iter(tasks.into_iter())
+        let stream = futures::stream::iter(tasks)
             .map(|(url, path)| {
                 let dm = &dm;
                 let url = url.clone();
@@ -588,6 +588,7 @@ impl LaunchEngine {
         keys
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_args(
         &self,
         info: &ManifestVersionInfo,
@@ -619,7 +620,7 @@ impl LaunchEngine {
             ),
             ("assets_index_name".to_string(), info.asset_index.id.clone()),
             ("launcher_name".to_string(), "EraLauncher".to_string()),
-            ("launcher_version".to_string(), "0.1.5".to_string()),
+                ("launcher_version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
             (
                 "natives_directory".to_string(),
                 natives_dir.to_string_lossy().to_string(),

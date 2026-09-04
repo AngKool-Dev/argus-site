@@ -1,0 +1,62 @@
+name: Linux smoke
+
+on:
+  push:
+    branches: [main, master, feat/**]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y temurin-21-jre librust-openssl-dev libssl-dev pkg-config
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            era-launcher/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('era-launcher/Cargo.lock') }}
+      - name: Build release binary
+        working-directory: era-launcher
+        run: cargo build --release
+      - name: Run unit + integration tests
+        working-directory: era-launcher
+        run: cargo test --release -- --nocapture
+      - name: Stage Linux tarball
+        working-directory: era-launcher
+        run: |
+          mkdir -p dist
+          cp target/release/era-launcher dist/era-launcher
+          chmod +x dist/era-launcher
+          tar -C dist -czf era-launcher-x86_64-linux.tar.gz era-launcher
+          sha256sum era-launcher-x86_64-linux.tar.gz > SHA256SUMS
+      - name: Upload Linux artifact (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: era-launcher-linux-x86_64
+          path: era-launcher/era-launcher-x86_64-linux.tar.gz
+          if-no-files-found: error
+      - name: Attach to GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            era-launcher/era-launcher-x86_64-linux.tar.gz
+            era-launcher/SHA256SUMS
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -357,7 +357,40 @@ impl BackendBridge {
     }
 
     /// Delete an instance using the REAL instance manager and config.
+    /// Generate a friendly instance ID based on loader type, e.g. "Vanilla",
+    /// "Fabric-1", "Quilt-2". Avoids UUID-style folder names in the
+    /// instances directory.
+    fn generate_instance_id(loader: &str, existing_ids: &[String]) -> String {
+        let base = match loader.to_lowercase().as_str() {
+            "vanilla" => "Vanilla",
+            "fabric" => "Fabric",
+            "quilt" => "Quilt",
+            "forge" => "Forge",
+            _ => "Instance",
+        };
+
+        if !existing_ids.iter().any(|id| id == base) {
+            return base.to_string();
+        }
+
+        let mut n = 2;
+        loop {
+            let candidate = format!("{}-{}", base, n);
+            if !existing_ids.iter().any(|id| id == &candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
     pub fn delete_instance(id: &str) -> bool {
+        // Remove from the filesystem first
+        let instances_dir = Self::instances_dir();
+        let instance_path = instances_dir.join(id);
+        if instance_path.exists() {
+            let _ = std::fs::remove_dir_all(&instance_path);
+        }
+
         let mut mgr = INSTANCE_MANAGER.lock().unwrap_or_else(|e| e.into_inner());
         let removed = mgr.remove(id);
 
@@ -419,7 +452,7 @@ impl BackendBridge {
             .unwrap_or_default();
 
         let config = InstanceConfig {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: Self::generate_instance_id("vanilla", &state.instances.iter().map(|i| i.id.clone()).collect::<Vec<_>>()),
             name,
             game_version,
             loader: "vanilla".to_string(),
@@ -820,7 +853,7 @@ Create a Fabric or Quilt instance first.",
                     });
                 }
             }
-            items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            items.sort_by_key(|a| a.name.to_lowercase());
             items
         };
 
@@ -1167,7 +1200,7 @@ Create a Fabric or Quilt instance first.",
             .unwrap_or_default();
 
         let config = InstanceConfig {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: Self::generate_instance_id(&l, &state.instances.iter().map(|i| i.id.clone()).collect::<Vec<_>>()),
             name,
             game_version: game_version.trim().to_string(),
             loader: l.clone(),
@@ -1385,7 +1418,7 @@ Create a Fabric or Quilt instance first.",
                 return Some(part.to_string());
             }
         }
-        stem.split('-').last().map(|s| s.to_string())
+        stem.split('-').next_back().map(|s| s.to_string())
     }
 
     /// Compare two version strings semver-ish. Returns negative if a < b,
@@ -1456,7 +1489,7 @@ Create a Fabric or Quilt instance first.",
             Some(rest) => rest
                 .chars()
                 .next()
-                .map_or(true, |c| !c.is_ascii_alphabetic()),
+                .is_none_or(|c| !c.is_ascii_alphabetic()),
             None => false,
         }
     }
@@ -2010,29 +2043,27 @@ Create a Fabric or Quilt instance first.",
         }
 
         // Check if process has exited
-        if !tracker.is_running() {
-            if tracker.pid().is_some() {
-                let status = tracker.take_exit_status();
-                let code = status.as_ref().and_then(|s| s.code());
-                state.runtime_state = RuntimeState::Stopped;
-                match code {
-                    Some(0) | None => {
-                        state.log(LogLevel::Info, "BACKEND", "Minecraft process exited");
-                    }
-                    Some(c) => {
-                        state.log(
-                            LogLevel::Warn,
-                            "BACKEND",
-                            &format!(
-                                "Minecraft exited with code {} — check LOGS for the error",
-                                c
-                            ),
-                        );
-                        state.set_error(format!("Minecraft exited (code {}) — see LOGS", c));
-                    }
+        if !tracker.is_running() && tracker.pid().is_some() {
+            let status = tracker.take_exit_status();
+            let code = status.as_ref().and_then(|s| s.code());
+            state.runtime_state = RuntimeState::Stopped;
+            match code {
+                Some(0) | None => {
+                    state.log(LogLevel::Info, "BACKEND", "Minecraft process exited");
                 }
-                tracker.stop(); // Clear the tracker
+                Some(c) => {
+                    state.log(
+                        LogLevel::Warn,
+                        "BACKEND",
+                        &format!(
+                            "Minecraft exited with code {} — check LOGS for the error",
+                            c
+                        ),
+                    );
+                    state.set_error(format!("Minecraft exited (code {}) — see LOGS", c));
+                }
             }
+            tracker.stop();
         }
     }
 
@@ -2127,7 +2158,7 @@ Create a Fabric or Quilt instance first.",
         // first launch by minutes.
         let dm = crate::downloads::DownloadManager::new();
         let dm_ref = &dm;
-        let mut stream = futures::stream::iter(download_tasks.into_iter())
+        let mut stream = futures::stream::iter(download_tasks)
             .map(|(url, path, label)| async move {
                 match dm_ref.download(&url, &path).await {
                     Ok(_) => None,

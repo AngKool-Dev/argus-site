@@ -24,6 +24,7 @@ pub struct ScanResult {
     pub notes: Vec<String>,
 }
 
+#[derive(Default)]
 pub struct SystemScanner;
 
 impl SystemScanner {

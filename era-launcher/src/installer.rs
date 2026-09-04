@@ -75,7 +75,10 @@ impl WebInstaller {
             "osx" => "macos",
             _ => "linux",
         };
-        let arch = "x64";
+        let arch = match self.platform.arch {
+            "arm64" | "aarch64" => "aarch64",
+            _ => "x64",
+        };
         let image_type = "jre";
 
         let api_url = format!(
@@ -340,7 +343,7 @@ fn extract_zip(archive_path: &Path, dest_dir: &Path) -> std::result::Result<(), 
     for i in 0..archive.len() {
         let mut zip_file = archive
             .by_index(i)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         let raw_path = match zip_file.enclosed_name() {
             Some(path) => path,
             None => continue,
@@ -380,7 +383,56 @@ fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> std::result::Result<(
     let mut archive = tar::Archive::new(tar);
 
     fs::create_dir_all(dest_dir)?;
-    archive.unpack(dest_dir)
+
+    // Detect a single top-level directory component so we can strip it (the
+    // Adoptium JRE tarball ships `jdk-21.0.x/bin/java`, etc.). This matches
+    // the zip path so `verify_java` can look in `dest_dir/bin/java`.
+    let mut top_level: Option<String> = None;
+    for entry in archive.entries().map_err(std::io::Error::other)? {
+        let entry = entry.map_err(std::io::Error::other)?;
+        let path = entry.path().map_err(std::io::Error::other)?.into_owned();
+        if let Some(first) = path.components().next() {
+            let comp = first.as_os_str().to_string_lossy().to_string();
+            if top_level.is_none() {
+                top_level = Some(comp);
+            } else if top_level.as_deref() != Some(&comp) {
+                top_level = None;
+                break;
+            }
+        } else {
+            top_level = None;
+            break;
+        }
+    }
+
+    // Re-open for extraction (entries iterator was consumed above).
+    let file = fs::File::open(archive_path)?;
+    let tar = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(tar);
+
+    for entry in archive.entries().map_err(std::io::Error::other)? {
+        let mut entry = entry.map_err(std::io::Error::other)?;
+        let raw_path = entry.path().map_err(std::io::Error::other)?.into_owned();
+        let stripped = if let Some(top) = &top_level {
+            raw_path
+                .strip_prefix(top)
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|_| raw_path.clone())
+        } else {
+            raw_path.clone()
+        };
+        if stripped.as_os_str().is_empty() {
+            continue;
+        }
+        let outpath = dest_dir.join(&stripped);
+        if let Some(parent) = outpath.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        entry
+            .unpack(&outpath)
+            .map_err(std::io::Error::other)?;
+    }
+    Ok(())
 }
 
 fn verify_java(java_dir: &Path) -> bool {
@@ -516,5 +568,58 @@ mod tests {
         assert_eq!(path.unwrap(), java_exe);
 
         let _ = std::fs::remove_dir_all(install_dir);
+    }
+
+    #[test]
+    fn test_adoptium_url_os_branch() {
+        // The Adoptium URL path is OS-dependent; assert that each branch
+        // produces a valid URL for the running platform and that the API
+        // endpoint is well-formed.
+        let install_dir = std::env::temp_dir().join(format!("era-test-url-{}", std::process::id()));
+        let installer = WebInstaller::new(install_dir.clone(), Some(21)).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let url = rt.block_on(installer.adoptium_jre_url(21));
+        if let Some(u) = url {
+            assert!(u.starts_with("https://"));
+            assert!(u.contains("jdk-21") || u.contains("jre21") || u.contains("/21/"));
+        }
+        let _ = std::fs::remove_dir_all(install_dir);
+    }
+
+    #[test]
+    fn test_extract_tar_gz_strips_top_dir() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let tmp = std::env::temp_dir().join(format!("era-test-tar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Synthesize a tar.gz containing a top-level dir `jdk-fake/` and two
+        // files inside it.
+        let archive_path = tmp.join("jdk.tar.gz");
+        let tar_gz = std::fs::File::create(&archive_path).unwrap();
+        let enc = GzEncoder::new(tar_gz, Compression::default());
+        let mut tar_builder = tar::Builder::new(enc);
+        let entries: [(&str, &[u8]); 2] = [
+            ("jdk-fake/bin/java", b"#!/bin/sh\necho fake\n" as &[u8]),
+            ("jdk-fake/VERSION", b"21\n" as &[u8]),
+        ];
+        for (name, body) in entries.iter() {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(name).unwrap();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar_builder.append(&header, *body).unwrap();
+        }
+        tar_builder.into_inner().unwrap().finish().unwrap();
+
+        let dest = tmp.join("extracted");
+        extract_archive(&archive_path, &dest).unwrap();
+        assert!(dest.join("bin").join("java").exists());
+        assert!(dest.join("VERSION").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

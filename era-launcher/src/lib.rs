@@ -11,6 +11,9 @@ pub mod minecraft;
 pub mod modrinth;
 pub mod platform;
 pub mod prelude;
+pub mod servers;
+pub mod crashes;
+pub mod worlds;
 pub mod versions;
 
 use once_cell::sync::Lazy;

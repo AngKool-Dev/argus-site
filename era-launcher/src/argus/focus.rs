@@ -83,7 +83,7 @@ impl FocusManager {
         if self.current_index == 0 {
             self.current_index = self.targets.len() - 1;
         } else {
-            self.current_index = self.current_index - 1;
+            self.current_index -= 1;
         }
     }
 

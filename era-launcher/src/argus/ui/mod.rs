@@ -12,9 +12,10 @@ use crate::argus::focus::FocusTarget;
 use crate::argus::state::{AppState, LogLevel, RuntimeState, Section};
 use crate::argus::theme;
 use crate::minecraft::optimization::OptimizationProfile;
+use crate::servers::{ServerEntry, ping_server};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
 use std::sync::Mutex;
 
 /// Hit-test map rebuilt every frame: (rect, target_id) pairs for mouse
@@ -40,22 +41,49 @@ pub fn hit_test(col: u16, row: u16) -> Option<String> {
         .map(|(_, id)| id.clone())
 }
 
-/// Style helper for terminal panels
+/// Style helper for terminal panels — rounded borders, themed background.
 fn panel_block(title: String) -> Block<'static> {
     let t = theme::current();
     Block::new()
+        .border_type(BorderType::Rounded)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(t.border))
         .title(title)
         .title_style(Style::default().fg(t.accent_dim).bold())
-        .bg(t.panel)
+        .bg(t.bg_panel)
 }
 
 /// Draw the top navigation bar (tabs)
 pub fn draw_navbar(frame: &mut Frame, area: Rect, state: &AppState, focus: &FocusManager) {
     let t = theme::current();
     let sections = Section::all();
-    let constraints: Vec<Constraint> = sections.iter().map(|_| Constraint::Length(12)).collect();
+
+    // Navbar background
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(t.bg_panel)),
+        area,
+    );
+
+    // Render a continuous border at the bottom of the navbar.
+    let border_y = area.bottom();
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(if state.current_section == Section::Home {
+                t.accent
+            } else {
+                t.border_dim
+            }),
+        ))
+        .style(Style::default().bg(t.bg_panel)),
+        Rect::new(area.left(), border_y, area.width, 1),
+    );
+
+    let tab_count = sections.len().max(1);
+    let constraints: Vec<Constraint> = sections
+        .iter()
+        .map(|_| Constraint::Percentage(100 / tab_count as u16))
+        .collect();
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(&constraints[..])
@@ -67,21 +95,29 @@ pub fn draw_navbar(frame: &mut Frame, area: Rect, state: &AppState, focus: &Focu
         let nav_id = format!("nav_{}", section.label().to_lowercase().replace(' ', "_"));
         let is_focused = focus.current().map(|f| f.id == nav_id).unwrap_or(false);
 
-        let style = if is_active {
-            Style::default().fg(t.bg).bg(t.accent).bold()
+        let (fg, bg) = if is_active {
+            (t.bg, t.accent)
         } else if is_focused {
-            Style::default().fg(t.accent).bg(t.bg_dark).bold()
+            (t.accent, t.bg_filled)
         } else {
-            Style::default().fg(t.text_dim).bg(t.bg_dark)
+            (t.text_muted, t.bg_panel)
         };
 
-        let title = section.label();
-        let text = vec![Line::from(Span::styled(format!("◯ {}", title), style))];
+        let indicator = if is_active { "▶ " } else { "  " };
+        let bullet = if is_active { "●" } else { "○" };
+        let label = section.label();
+
+        let text = vec![Line::from(vec![
+            Span::styled(indicator, Style::default().fg(fg).bg(bg)),
+            Span::styled(bullet.to_string(), Style::default().fg(fg).bg(bg).bold()),
+            Span::styled(format!(" {} ", label), Style::default().fg(fg).bg(bg).bold()),
+            Span::styled(" ".repeat(4), Style::default().fg(t.bg_filled).bg(bg)),
+        ])];
 
         register_hit(&nav_id, *chunk);
         frame.render_widget(
             Paragraph::new(text)
-                .block(Block::new().bg(t.bg_dark))
+                .block(Block::new().bg(bg))
                 .alignment(Alignment::Center),
             *chunk,
         );
@@ -91,9 +127,33 @@ pub fn draw_navbar(frame: &mut Frame, area: Rect, state: &AppState, focus: &Focu
 /// Draw the header with title and runtime status
 pub fn draw_header(frame: &mut Frame, area: Rect, state: &AppState, _focus: &FocusManager) {
     let t = theme::current();
+
+    let player_name = state
+        .active_account_name
+        .as_deref()
+        .unwrap_or("Steve");
+    let runtime = &state.runtime_state;
+    let status_label = runtime.label();
+    let java_version = state
+        .java_installations
+        .first()
+        .and_then(|j| j.version.as_ref())
+        .map(|v| v.major.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    // Required inner width: "<icon> <LABEL> Java <major> · Player: <name>"
+    let inner_needed = 1 /* icon */
+        + 1 + status_label.chars().count()
+        + 1 + 5 /* "Java " */
+        + java_version.chars().count()
+        + 3 /* " · " */
+        + 9 /* "Player: " */
+        + player_name.chars().count();
+    // Outer width = inner + 2 borders. Clamp to [30, 56] so the left pane still has room.
+    let status_width = (inner_needed + 2).clamp(30, 56).min(area.width as usize) as u16;
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(30)])
+        .constraints([Constraint::Min(0), Constraint::Length(status_width)])
         .split(area);
 
     // Left side: title
@@ -104,71 +164,172 @@ pub fn draw_header(frame: &mut Frame, area: Rect, state: &AppState, _focus: &Foc
         )),
         Line::from(Span::styled(
             "ARGUS — Minecraft Runtime Control Terminal",
-            Style::default().fg(t.text_dim),
+            Style::default().fg(t.text_subtle),
         )),
     ];
     frame.render_widget(
         Paragraph::new(title).block(
             Block::new()
+                .border_type(BorderType::Rounded)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(t.border))
-                .bg(t.panel),
+                .title(" System ".to_string())
+                .title_style(Style::default().fg(t.accent).bold())
+                .bg(t.bg_panel),
         ),
         chunks[0],
     );
 
     // Right side: runtime status
-    let runtime = &state.runtime_state;
     let status_color = match runtime {
         RuntimeState::Running => t.success,
         RuntimeState::Error(_) => t.error,
         RuntimeState::Starting => t.info,
         RuntimeState::Stopping => t.warning,
-        RuntimeState::Stopped => t.text_dim,
+        RuntimeState::Stopped => t.text_subtle,
     };
 
-    let java_version = state
-        .java_installations
-        .first()
-        .and_then(|j| j.version.as_ref())
-        .map(|v| v.major.to_string())
-        .unwrap_or_else(|| "?".to_string());
+    let status_icon = runtime.status_indicator();
+
+    // Inner width available for the name = status_width - 2 (borders) - everything else on the line.
+    let name_budget = status_width
+        .saturating_sub(22 + status_label.chars().count() as u16 + java_version.chars().count() as u16)
+        .max(1) as usize;
+    let player_name = truncate_label(player_name, name_budget);
 
     let status_text = vec![Line::from(vec![
-        Span::styled("● ", Style::default().fg(status_color)),
+        Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+        Span::styled(format!("{} ", status_label), Style::default().fg(status_color).bold()),
+        Span::styled(format!("Java {}", java_version), Style::default().fg(t.text_dim)),
+        Span::styled(" · ", Style::default().fg(t.divider)),
         Span::styled(
-            format!("{} {}", runtime.status_indicator(), runtime.label()),
-            Style::default().fg(status_color).bold(),
-        ),
-        Span::styled(
-            format!(" | Java {} ", java_version),
-            Style::default().fg(t.text_dim),
-        ),
-        Span::styled(
-            format!(
-                "| Player: {} ",
-                state.active_account_name.as_deref().unwrap_or("Steve")
-            ),
+            format!("Player: {}", player_name),
             Style::default().fg(t.text_dim),
         ),
     ])];
 
+    let header_title = format!(" {} STATUS ", status_label.to_uppercase());
     frame.render_widget(
         Paragraph::new(status_text)
             .block(
                 Block::new()
+                    .border_type(BorderType::Rounded)
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(t.border))
-                    .bg(t.panel),
+                    .border_style(Style::default().fg(status_color))
+                    .title(header_title)
+                    .title_style(Style::default().fg(status_color).bold())
+                    .bg(t.bg_panel),
             )
             .alignment(Alignment::Right),
         chunks[1],
     );
 }
 
-/// Draw the instance list for the INSTANCES section
-pub fn draw_instance_list(frame: &mut Frame, area: Rect, state: &AppState, focus: &FocusManager) {
+/// Draw the detail pane for the currently selected instance
+pub fn draw_instance_detail(frame: &mut Frame, area: Rect, state: &AppState, focus: &FocusManager) {
     let t = theme::current();
+
+    if let Some(inst) = state.selected_instance.as_ref() {
+        let loader_color = loader_color(inst.loader.as_str());
+        let version_str = inst.loader_version.as_deref().unwrap_or("default");
+
+        // Detail rows — simplified: show version numbers, not raw paths
+        let java_display = inst.java.as_ref()
+            .and_then(|p| extract_java_version(p))
+            .unwrap_or_else(|| inst.java.as_deref().unwrap_or("Auto-detect").to_string());
+
+        let rows: Vec<(Color, &str, String)> = vec![
+            (t.text_dim, "Game",      inst.game_version.clone()),
+            (loader_color, "Loader",  format!("{} {}", inst.loader.to_uppercase(), version_str)),
+            (t.text_dim, "RAM",       format!("{} GB", inst.memory / 1024)),
+            (t.text_dim, "Java",      java_display),
+            (t.text_dim, "Resolution", inst.resolution_width.map(|w| format!("{}x{}", w, inst.resolution_height.unwrap_or(0))).unwrap_or_else(|| "Default".to_string())),
+        ];
+
+        let mut items = Vec::new();
+        for (fg, label, value) in rows {
+            items.push(ListItem::new(vec![Line::from(vec![
+                Span::styled(format!("{:<12}", label), Style::default().fg(fg).bold()),
+                Span::styled(value.clone(), Style::default().fg(t.text)),
+            ])]));
+            items.push(ListItem::new(vec![Line::from(Span::raw(""))]));
+        }
+
+        let detail_list = List::new(items)
+            .block(panel_block(" INSTANCE ".to_string()));
+
+        // Play button — at the bottom of the detail pane
+        let play_id = "home_play";
+        let is_play_focused = focus.current().map(|f| f.id == play_id).unwrap_or(false);
+
+        let btn_h = 3u16;
+        let gap = 1u16;
+        let list_height = area.height.saturating_sub(btn_h + gap);
+        let btn_area = Rect::new(area.left(), area.top() + list_height + gap, area.width, btn_h);
+        let list_area = Rect::new(area.left(), area.top(), area.width, list_height);
+
+        // Fill the full area with panel background so the border box is complete
+        frame.render_widget(
+            Paragraph::new("").style(Style::default().bg(t.bg_panel)),
+            area,
+        );
+
+        frame.render_widget(detail_list, list_area);
+
+        register_hit(play_id, btn_area);
+        let play_border = if is_play_focused { t.info } else { t.border_dim };
+        let play_bg = t.bg_panel;
+        let play_fg = if is_play_focused { t.text } else { t.text_dim };
+        frame.render_widget(
+            Paragraph::new(vec![Line::from(Span::styled("▶ PLAY", Style::default().fg(play_fg).bg(play_bg).bold()))])
+                .block(
+                    Block::new()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(play_border))
+                        .bg(play_bg),
+                )
+                .alignment(Alignment::Center),
+            btn_area,
+        );
+    } else {
+        // No selection
+        frame.render_widget(
+            Paragraph::new(vec![Line::from(Span::styled(
+                "Select an instance to view details.",
+                Style::default().fg(t.text_dim),
+            ))])
+            .block(panel_block(" DETAILS ".to_string())),
+            area,
+        );
+    }
+}
+
+/// Draw instance list for the INSTANCES section
+pub fn draw_instance_list(frame: &mut Frame, area: Rect, state: &AppState, focus: &FocusManager, show_action_bar: bool) {
+    let t = theme::current();
+
+    // Fill the inner area with panel background
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(t.bg_panel)),
+        area,
+    );
+
+    // Split area: list on top, optional action bar at bottom
+    let (list_area, action_area) = if show_action_bar {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(0),        // Instance list
+                Constraint::Length(1),     // Spacer
+                Constraint::Length(3),     // Action bar
+            ])
+            .split(area);
+        (chunks[0], Some(chunks[2]))
+    } else {
+        (area, None)
+    };
+
     let mut items = Vec::new();
     let mut focused_idx = 0usize;
 
@@ -186,86 +347,83 @@ pub fn draw_instance_list(frame: &mut Frame, area: Rect, state: &AppState, focus
 
         let loader_color = loader_color(inst.loader.as_str());
 
-        let bg = if is_selected {
-            t.bg_dark
-        } else if is_focused {
-            t.panel
+        let bg = if is_focused {
+            t.selection
         } else {
-            t.bg
+            t.bg_panel
         };
 
-        let marker = if is_selected { "◉" } else { "○" };
+        let badge = if is_selected {
+            Span::styled(" ★ ", Style::default().fg(t.warning).bold().bg(bg))
+        } else if is_focused {
+            Span::styled(" ▶ ", Style::default().fg(t.accent).bold().bg(bg))
+        } else {
+            Span::raw("   ")
+        };
+
+        let loader_badge = match inst.loader.as_str() {
+            "fabric" => format!("[FABRIC v{}]", inst.loader_version.as_deref().unwrap_or("?")),
+            "forge" => format!("[FORGE v{}]", inst.loader_version.as_deref().unwrap_or("?")),
+            "vanilla" => "[VANILLA]".to_string(),
+            _ => format!("[{}]", inst.loader.to_uppercase()),
+        };
+
         let title = Line::from(vec![
-            Span::styled(
-                format!("{} [{}] ", marker, i + 1),
-                Style::default().fg(t.accent).bold().bg(bg),
-            ),
+            badge,
             Span::styled(
                 format!("{} ", inst.name),
-                Style::default().fg(t.text).bold().bg(bg),
+                Style::default().fg(if is_focused { t.bg } else { t.text }).bold().bg(bg),
             ),
             Span::styled(
-                format!(
-                    "{}{}",
-                    inst.loader.to_uppercase(),
-                    inst.loader_version.as_deref().unwrap_or("")
-                ),
+                format!("{} ", loader_badge),
                 Style::default().fg(loader_color).bold().bg(bg),
             ),
-            if is_selected {
-                Span::styled("  (selected)", Style::default().fg(t.accent_dim).bg(bg))
-            } else {
-                Span::raw("")
-            },
-        ]);
-
-        let detail = Line::from(vec![
             Span::styled(
-                format!(
-                    "     Version: {} | RAM: {}GB | Java: {}",
-                    inst.game_version,
-                    inst.memory / 1024,
-                    inst.java.as_deref().unwrap_or("auto"),
-                ),
+                format!("  MC {}", inst.game_version),
                 Style::default().fg(t.text_dim).bg(bg),
             ),
-            Span::styled(
-                format!(" | Runtime: {}", state.runtime_state.label()),
-                Style::default()
-                    .fg(runtime_color(&state.runtime_state))
-                    .bold()
-                    .bg(bg),
-            ),
         ]);
 
-        items.push(ListItem::new(vec![title, detail]));
+        let java_short = inst.java.as_ref()
+            .and_then(|p| extract_java_version(p))
+            .unwrap_or_else(|| "auto".to_string());
+
+        let detail = Line::from(vec![
+            Span::styled("   ", Style::default().bg(bg)),
+            Span::styled(
+                format!("RAM: {}GB", inst.memory / 1024),
+                Style::default().fg(t.text_subtle).bg(bg),
+            ),
+            Span::styled(format!(" · Java: {}", java_short), Style::default().fg(t.text_subtle).bg(bg)),
+            Span::styled(" ".to_string(), Style::default().bg(bg)),
+        ]);
+
+        items.push(ListItem::new(vec![title, detail, Line::from(Span::raw(" "))]));
     }
 
     if items.is_empty() {
         items.push(ListItem::new(vec![Line::from(Span::styled(
-            "No instances found. Press 'c' to create one.",
+            "  No instances found.",
             Style::default().fg(t.text_dim),
         ))]));
-    } else {
-        // Delete hint row — focusable and clickable.
         items.push(ListItem::new(vec![Line::from(Span::styled(
-            "  [X] Delete selected instance",
-            Style::default().fg(t.error),
-        ))]));
-        items.push(ListItem::new(vec![Line::from(Span::styled(
-            "  ENTER selects · again launches",
-            Style::default().fg(t.text_muted),
+            "  Press 'c' to create one.",
+            Style::default().fg(t.accent_dim),
         ))]));
     }
 
     let list = List::new(items)
-        .block(panel_block(format!(
-            "INSTANCES  ({} total · X deletes selected)",
-            state.instances.len()
-        )))
+        .block(
+            if show_action_bar {
+                // Outer border is drawn by draw_home; no inner border needed
+                Block::new().bg(t.bg_panel)
+            } else {
+                // Standalone list (e.g. INSTANCES section) — needs its own border+title
+                panel_block(format!(" INSTANCES  ({} total)", state.instances.len()))
+            }
+        )
         .style(Style::default().fg(t.text).bg(t.bg))
-        .highlight_style(Style::default().bg(t.bg_dark).fg(t.accent))
-        .highlight_symbol("▸ ");
+        .highlight_style(Style::default().bg(t.selection).fg(t.text));
 
     // Selection follows the FOCUSED row so ↑↓ scrolls the list.
     let selected = focus
@@ -281,10 +439,19 @@ pub fn draw_instance_list(frame: &mut Frame, area: Rect, state: &AppState, focus
         })
         .unwrap_or(0);
 
-    register_hit("instances_list", area);
+     register_hit("instances_list", list_area);
     let mut list_state = ListState::default();
     list_state.select(Some(selected));
-    frame.render_stateful_widget(list, area, &mut list_state);
+    frame.render_stateful_widget(list, list_area, &mut list_state);
+
+    // Action buttons at bottom (only for HOME screen)
+    if let Some(ab_area) = action_area {
+        let actions: Vec<(String, FocusTarget)> = vec![
+            ("[ + New ]".to_string(), FocusTarget::new("home_create", "Create")),
+            ("[ Folder ]".to_string(), FocusTarget::new("home_open", "Open")),
+        ];
+        draw_action_bar(frame, ab_area, &actions, focus);
+    }
 }
 
 fn loader_color(loader: &str) -> Color {
@@ -297,144 +464,159 @@ fn loader_color(loader: &str) -> Color {
     }
 }
 
-fn runtime_color(state: &RuntimeState) -> Color {
-    let t = theme::current();
-    match state {
-        RuntimeState::Running => t.success,
-        RuntimeState::Error(_) => t.error,
-        RuntimeState::Starting => t.info,
-        RuntimeState::Stopping => t.warning,
-        RuntimeState::Stopped => t.text_muted,
+/// Extract a short Java version string with vendor from a java executable path.
+/// e.g. "C:\Java25\jdk-25.0.4.1+1\bin\java.exe" -> "Temurin 25"
+fn extract_java_version(path: &str) -> Option<String> {
+    use std::path::Path;
+    let p = Path::new(path);
+    let path_str = p.to_string_lossy().to_lowercase();
+
+    // Detect vendor from known path patterns
+    let vendor = if path_str.contains("EraLauncher") || path_str.contains("adoptium") || path_str.contains("temurin") || (path_str.contains("jdk-") && path_str.contains("+")) {
+        "Temurin"
+    } else if path_str.contains("zulu") {
+        "Zulu"
+    } else if path_str.contains("corretto") {
+        "Corretto"
+    } else if path_str.contains("openjdk") || path_str.contains("java-") {
+        "OpenJDK"
+    } else {
+        "Java"
+    };
+
+    // Look for a path component that has a version number (e.g. "jdk-25.0.4.1", "Java25", "java-25")
+    for component in p.components() {
+        if let std::path::Component::Normal(name) = component {
+            let name_str = name.to_string_lossy();
+            // Try patterns like "jdk-25.0.4.1" or "java-25"
+            let digits: String = name_str.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(major) = digits.parse::<u32>() {
+                if major >= 8 {
+                    return Some(format!("{} {}", vendor, major));
+                }
+            }
+            // Pattern like "Java25" where version is embedded
+            let embedded: String = name_str.chars().skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(major) = embedded.parse::<u32>() {
+                if major >= 8 {
+                    return Some(format!("{} {}", vendor, major));
+                }
+            }
+        }
     }
+    None
 }
 
-/// Draw the HOME screen
+/// Draw the HOME screen — two-pane layout:
+///   instance list (left) | detail pane (right)
 pub fn draw_home(frame: &mut Frame, area: Rect, state: &AppState, focus: &FocusManager) {
     let t = theme::current();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(0)])
+
+    // Two columns: instance list + detail
+    let main = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(44), // Instance list
+            Constraint::Min(1),     // Detail pane (takes remaining space)
+        ])
         .split(area);
 
-    // Welcome banner with real system info
-    let java_version = state
-        .java_installations
-        .first()
-        .and_then(|j| j.version.as_ref())
-        .map(|v| format!("Java {}", v.major))
-        .unwrap_or("No Java detected".to_string());
-
-    let instance_count = state.instances.len();
-    let runtime_label = state.runtime_state.label();
-
-    let top_border = "╔══════════════════════════════════════════════════════════════╗";
-    let inner_width = top_border.chars().count().saturating_sub(2);
-    let info_content = format!(
-        "  {} | {} | {} instances",
-        runtime_label, java_version, instance_count
-    );
-    let info_pad = inner_width - info_content.chars().count();
-    let info_line = format!("║{}{}║", info_content, " ".repeat(info_pad.max(0)));
-    let title_text = "ARGUS Runtime Control Terminal";
-    let version_text = concat!("v", env!("CARGO_PKG_VERSION"));
-    let title_content = format!("  {}  {}  ", title_text, version_text);
-    let title_pad = inner_width - title_content.chars().count();
-    let title_line = format!("║{}{}║", title_content, " ".repeat(title_pad.max(0)));
-    let welcome = vec![
-        Line::from(Span::styled(top_border, Style::default().fg(t.border))),
-        Line::from(Span::styled(
-            format!("║{}║", " ".repeat(inner_width)),
-            Style::default().fg(t.border),
-        )),
-        Line::from(Span::styled(
-            title_line,
-            Style::default().fg(t.accent).bold(),
-        )),
-        Line::from(vec![
-            Span::styled(info_line, Style::default().fg(t.text_dim)),
-            Span::raw(format!("{}║", " ".repeat(info_pad))),
-        ]),
-        Line::from(Span::styled(
-            "║                                                              ║",
-            Style::default().fg(t.border),
-        )),
-        Line::from(Span::styled(
-            "╚══════════════════════════════════════════════════════════════╝",
-            Style::default().fg(t.border),
-        )),
-    ];
+    // Fill both columns background
     frame.render_widget(
-        Paragraph::new(welcome).block(panel_block("WELCOME".to_string())),
-        chunks[0],
+        Paragraph::new("").style(Style::default().bg(t.bg)),
+        area,
     );
 
-    // Quick actions
-    let quick_actions: Vec<(String, FocusTarget)> = vec![
-        (
-            "Launch Instance".to_string(),
-            FocusTarget::new("home_launch", "Launch"),
-        ),
-        (
-            "Create Instance".to_string(),
-            FocusTarget::new("home_create", "Create"),
-        ),
-        (
-            "Browse Mods".to_string(),
-            FocusTarget::new("home_mods", "Mods"),
-        ),
-        (
-            "Open Folder".to_string(),
-            FocusTarget::new("home_open", "Open"),
-        ),
-        (
-            "Java Settings".to_string(),
-            FocusTarget::new("home_java", "Java"),
-        ),
-    ];
-    draw_quick_actions(frame, chunks[1], &quick_actions, focus);
+    // Left column: panel that wraps list + action bar
+    // Use full main[0] height; the list expands to fill, action bar at bottom.
+    let outer = Block::new()
+        .border_type(BorderType::Rounded)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.border))
+        .title(" INSTANCES ".to_string())
+        .title_style(Style::default().fg(t.accent_dim).bold())
+        .bg(t.bg_panel);
+
+    let inner = outer.inner(main[0]);
+    frame.render_widget(outer, main[0]);
+
+    // Left: instance list (no own border — uses outer panel)
+    draw_instance_list(frame, inner, state, focus, true);
+
+    // Right: detail pane (with its own panel_block border)
+    draw_instance_detail(frame, main[1], state, focus);
 }
 
-/// Draw quick action buttons
-pub fn draw_quick_actions(
+/// Draw compact action buttons in a horizontal bar
+pub fn draw_action_bar(
     frame: &mut Frame,
     area: Rect,
     actions: &[(String, FocusTarget)],
     focus: &FocusManager,
 ) {
     let t = theme::current();
-    let constraints: Vec<Constraint> = vec![Constraint::Length(24); actions.len()];
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(&constraints[..])
-        .split(area);
 
-    for (i, (label, target)) in actions.iter().enumerate() {
+    // Background for the action bar area
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(t.bg_panel)),
+        Rect::new(area.left(), area.top(), area.width, area.height),
+    );
+
+    let btn_h = 3u16;
+    let btn_w = 16u16;
+    let btn_gap = 3u16;
+    let total_w = (btn_w + btn_gap) * actions.len() as u16 - btn_gap;
+    // Center the buttons vertically and horizontally within the area
+    let start_y = area.top() + (area.height.saturating_sub(btn_h)) / 2;
+    let start_x = area.left() + (area.width.saturating_sub(total_w)) / 2;
+
+     for (i, (label, target)) in actions.iter().enumerate() {
         let is_focused = focus.current().map(|f| f.id == target.id).unwrap_or(false);
-        let style = if is_focused {
-            Style::default().fg(t.bg).bg(t.accent).bold()
-        } else {
-            Style::default().fg(t.accent).bg(t.bg_dark)
-        };
-        let block = if is_focused {
-            Block::new()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(t.border_focus))
-                .bg(t.accent)
-        } else {
-            Block::new()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(t.border))
-                .bg(t.bg_dark)
-        };
 
-        let label_text = format!("[ {} ]", label);
-        register_hit(&target.id, chunks[i.min(chunks.len() - 1)]);
-        frame.render_widget(
-            Paragraph::new(vec![Line::from(Span::styled(label_text, style))])
+        let x = start_x + (i as u16 * (btn_w + btn_gap));
+
+        if is_focused {
+            // Blue outline for focused action button — distinct from green Play button
+            let rect = Rect::new(x, start_y, btn_w, btn_h);
+            register_hit(&target.id, rect);
+            frame.render_widget(
+                Paragraph::new(vec![Line::from(Span::styled(
+                    label.chars().take((btn_w - 4) as usize).collect::<String>(),
+                    Style::default().fg(t.text).bg(t.bg_panel).bold(),
+                ))])
+                .block(
+                    Block::new()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(t.info))
+                        .bg(t.bg_panel)
+                        .border_type(BorderType::Rounded),
+                )
+                .alignment(Alignment::Center),
+                rect,
+            );
+        } else {
+            let bg = t.bg_panel;
+            let fg = t.text_dim;
+            let rect = Rect::new(x, start_y, btn_w, btn_h);
+            let block = Block::new()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(t.border_dim))
+                .bg(bg)
+                .border_type(BorderType::Rounded);
+
+            let label_text = label.chars().take((btn_w - 4) as usize).collect::<String>();
+            register_hit(&target.id, rect);
+            frame.render_widget(
+                Paragraph::new(vec![Line::from(Span::styled(
+                    label_text,
+                    Style::default().fg(fg).bg(bg).bold(),
+                ))])
                 .block(block)
                 .alignment(Alignment::Center),
-            chunks[i.min(chunks.len() - 1)],
-        );
+                rect,
+            );
+        }
     }
 }
 
@@ -484,15 +666,16 @@ pub fn draw_discover(frame: &mut Frame, area: Rect, state: &AppState, focus: &Fo
                 .border_style(Style::default().fg(search_border))
                 .title("Search Modrinth".to_string())
                 .title_style(Style::default().fg(t.accent_dim).bold())
-                .bg(t.panel),
+                .bg(t.bg_panel),
         ),
         outer[0],
     );
 
     // --- Categories (left) + Results (right) ---
+    let sidebar_width = (area.width / 4).clamp(18, 32);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(24), Constraint::Min(0)])
+        .constraints([Constraint::Length(sidebar_width), Constraint::Min(0)])
         .split(outer[1]);
 
     // Left: category selector INSIDE Discover
@@ -545,7 +728,7 @@ pub fn draw_discover(frame: &mut Frame, area: Rect, state: &AppState, focus: &Fo
                     t.border
                 },
             ))
-            .bg(t.panel),
+            .bg(t.bg_panel),
     );
     register_hit("discover_categories", columns[0]);
     frame.render_widget(cat_list, columns[0]);
@@ -640,7 +823,7 @@ pub fn draw_discover(frame: &mut Frame, area: Rect, state: &AppState, focus: &Fo
                         t.border
                     },
                 ))
-                .bg(t.panel),
+                .bg(t.bg_panel),
         )
         .style(Style::default().fg(t.text).bg(t.bg))
         .highlight_style(Style::default().bg(t.bg_dark).fg(t.accent))
@@ -666,33 +849,67 @@ fn format_downloads(n: u64) -> String {
 pub fn draw_logs(frame: &mut Frame, area: Rect, state: &AppState, _focus: &FocusManager) {
     let t = theme::current();
     let mut items = Vec::new();
-    // Skip the newest `log_scroll` entries so scrolling moves back in time.
-    for entry in state.logs.iter().rev().skip(state.log_scroll).take(500) {
-        let color = match entry.level {
-            LogLevel::Error => t.error,
-            LogLevel::Warn => t.warning,
-            LogLevel::Info => t.info,
-            LogLevel::Debug => t.text_muted,
-        };
-        let line = Line::from(vec![
-            Span::styled(
-                format!("[{}]", entry.timestamp),
-                Style::default().fg(t.text_muted),
-            ),
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                format!("[{}]", entry.level.label()),
-                Style::default().fg(color),
-            ),
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                format!("<{}>", entry.source),
-                Style::default().fg(t.text_muted),
-            ),
-            Span::styled(" ", Style::default()),
-            Span::styled(entry.message.as_str(), Style::default().fg(t.text)),
-        ]);
-        items.push(ListItem::new(vec![line]));
+
+    if state.live_log_view {
+        // Live tail of the argus-live.log capture file written while the
+        // game is running. We display the most recent 500 lines.
+        items.push(ListItem::new(vec![Line::from(Span::styled(
+            "▸ LIVE — Shift+L to switch back to in-memory logs",
+            Style::default().fg(t.accent_dim).bold(),
+        ))]));
+        items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
+        if let Some(path) = &state.live_log_path {
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    for line in content.lines().rev().take(500) {
+                        items.push(ListItem::new(vec![Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(t.text),
+                        ))]));
+                    }
+                }
+                Err(_) => {
+                    items.push(ListItem::new(vec![Line::from(Span::styled(
+                        "(no live log file yet — launch a game to start capturing)",
+                        Style::default().fg(t.text_dim),
+                    ))]));
+                }
+            }
+        } else {
+            items.push(ListItem::new(vec![Line::from(Span::styled(
+                "No instance selected.",
+                Style::default().fg(t.text_dim),
+            ))]));
+        }
+    } else {
+        // Skip the newest `log_scroll` entries so scrolling moves back in time.
+        for entry in state.logs.iter().rev().skip(state.log_scroll).take(500) {
+            let color = match entry.level {
+                LogLevel::Error => t.error,
+                LogLevel::Warn => t.warning,
+                LogLevel::Info => t.info,
+                LogLevel::Debug => t.text_muted,
+            };
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("[{}]", entry.timestamp),
+                    Style::default().fg(t.text_muted),
+                ),
+                Span::styled(" ", Style::default()),
+                Span::styled(
+                    format!("[{}]", entry.level.label()),
+                    Style::default().fg(color),
+                ),
+                Span::styled(" ", Style::default()),
+                Span::styled(
+                    format!("<{}>", entry.source),
+                    Style::default().fg(t.text_muted),
+                ),
+                Span::styled(" ", Style::default()),
+                Span::styled(entry.message.as_str(), Style::default().fg(t.text)),
+            ]);
+            items.push(ListItem::new(vec![line]));
+        }
     }
 
     if items.is_empty() {
@@ -774,48 +991,60 @@ pub fn draw_settings(frame: &mut Frame, area: Rect, state: &AppState, focus: &Fo
         .unwrap_or_else(|| "Default (Steve)".to_string());
 
     items.push(ListItem::new(vec![Line::from(vec![
-        Span::styled("◯ Default Memory: ", Style::default().fg(t.text_dim)),
+        Span::styled("◯ ", Style::default().fg(t.border)),
+        Span::styled("Default Memory: ", Style::default().fg(t.text_dim)),
         Span::styled(format!("{} MB", default_memory), memory_style),
+        Span::styled("  (ENTER to change)", Style::default().fg(t.text_muted)),
     ])]));
     items.push(ListItem::new(vec![Line::from(vec![
-        Span::styled("◯ Java Path: ", Style::default().fg(t.text_dim)),
+        Span::styled("◯ ", Style::default().fg(t.border)),
+        Span::styled("Java Path: ", Style::default().fg(t.text_dim)),
         Span::styled(java_path.as_deref().unwrap_or("Auto-detect"), java_style),
+        Span::styled("  (ENTER to change)", Style::default().fg(t.text_muted)),
     ])]));
     items.push(ListItem::new(vec![Line::from(vec![
-        Span::styled("◯ Theme: ", Style::default().fg(t.text_dim)),
+        Span::styled("◯ ", Style::default().fg(t.border)),
+        Span::styled("Theme: ", Style::default().fg(t.text_dim)),
         Span::styled(theme_name, theme_style),
+        Span::styled("  (ENTER to change)", Style::default().fg(t.text_muted)),
     ])]));
     items.push(ListItem::new(vec![Line::from(vec![
-        Span::styled("◯ Language: ", Style::default().fg(t.text_dim)),
+        Span::styled("◯ ", Style::default().fg(t.border)),
+        Span::styled("Language: ", Style::default().fg(t.text_dim)),
         Span::styled(language, language_style),
+        Span::styled("  (ENTER to change)", Style::default().fg(t.text_muted)),
     ])]));
     items.push(ListItem::new(vec![Line::from(vec![
-        Span::styled("◯ Optimization: ", Style::default().fg(t.text_dim)),
+        Span::styled("◯ ", Style::default().fg(t.border)),
+        Span::styled("Optimization: ", Style::default().fg(t.text_dim)),
         Span::styled(optimization_profile.as_str(), optimization_style),
         Span::styled("  (ENTER to change)", Style::default().fg(t.text_muted)),
     ])]));
     items.push(ListItem::new(vec![Line::from(vec![
-        Span::styled("◯ Offline Account: ", Style::default().fg(t.text_dim)),
+        Span::styled("◯ ", Style::default().fg(t.border)),
+        Span::styled("Offline Account: ", Style::default().fg(t.text_dim)),
         Span::styled(account_label, account_style),
         Span::styled("  (ENTER to manage)", Style::default().fg(t.text_muted)),
     ])]));
     items.push(ListItem::new(vec![Line::from(vec![
-        Span::styled("◯ Window: ", Style::default().fg(t.text_dim)),
+        Span::styled("◯ ", Style::default().fg(t.border)),
+        Span::styled("Window: ", Style::default().fg(t.text_dim)),
         Span::styled(
             format!("{}x{} (maximized: {})", win_w, win_h, win_max),
             window_style,
         ),
+        Span::raw(" "),
     ])]));
     items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
     items.push(ListItem::new(vec![Line::from(Span::styled(
         "Detected Java Installations:",
-        Style::default().fg(t.accent),
+        Style::default().fg(t.accent_dim).bold(),
     ))]));
     for (i, j) in state.java_installations.iter().enumerate() {
         let java_id = format!("java_{}", i);
         let is_java_focused = focus.current().map(|f| f.id == java_id).unwrap_or(false);
         let java_dot_style = if is_java_focused {
-            Style::default().fg(t.accent)
+            Style::default().fg(t.accent).bold()
         } else {
             Style::default().fg(t.text_dim)
         };
@@ -841,7 +1070,7 @@ pub fn draw_settings(frame: &mut Frame, area: Rect, state: &AppState, focus: &Fo
         ])]));
     }
 
-    let list = List::new(items).block(panel_block("SETTINGS".to_string()));
+    let list = List::new(items).block(panel_block(" SETTINGS ".to_string()));
     frame.render_widget(list, area);
 }
 
@@ -875,14 +1104,13 @@ fn draw_settings_selector(frame: &mut Frame, area: Rect, state: &AppState, _focu
         }
         SettingsEditMode::JavaSelector => {
             let mut items = Vec::new();
-            items.push(format!(
-                "{}",
+            items.push(
                 if state.settings_edit_index == 0 {
-                    "← Auto-detect  selected"
+                    "← Auto-detect  selected".to_string()
                 } else {
-                    "  Auto-detect"
+                    "  Auto-detect".to_string()
                 }
-            ));
+            );
             for (i, j) in state.java_installations.iter().enumerate() {
                 let version_str = j
                     .version
@@ -959,8 +1187,6 @@ fn draw_settings_selector(frame: &mut Frame, area: Rect, state: &AppState, _focu
         }
         SettingsEditMode::None => return,
     };
-
-    let items = items;
 
     let items_iter = items.iter().map(|s| {
         ListItem::new(vec![Line::from(Span::styled(
@@ -1071,7 +1297,7 @@ pub fn draw_mods(frame: &mut Frame, area: Rect, state: &AppState, focus: &FocusM
             let bg = if is_focused { t.bg_dark } else { t.bg };
             items.push(ListItem::new(vec![Line::from(vec![
                 Span::styled(
-                    format!("[ UPDATE ] "),
+                    "[ UPDATE ] ".to_string(),
                     Style::default().fg(t.warning).bold().bg(bg),
                 ),
                 Span::styled(u.title.clone(), Style::default().fg(t.text).bg(bg)),
@@ -1125,6 +1351,10 @@ pub fn draw_worlds(frame: &mut Frame, area: Rect, state: &AppState, _focus: &Foc
         Span::styled("Worlds for ", Style::default().fg(t.text_dim)),
         Span::styled(target, Style::default().fg(t.accent).bold()),
     ])]));
+    items.push(ListItem::new(vec![Line::from(Span::styled(
+        "  b — Backup ·  r — Restore ·  O — Open folder ·  d — Delete",
+        Style::default().fg(t.text_muted),
+    ))]));
     items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
 
     for world in &state.worlds {
@@ -1165,6 +1395,11 @@ pub fn draw_crashes(frame: &mut Frame, area: Rect, state: &AppState, _focus: &Fo
         Span::styled(target, Style::default().fg(t.accent).bold()),
     ])]));
     items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
+    items.push(ListItem::new(vec![Line::from(Span::styled(
+        "  c — Copy ·  d — Delete ·  o — Open folder",
+        Style::default().fg(t.text_muted),
+    ))]));
+    items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
 
     for report in &state.crash_reports {
         items.push(ListItem::new(vec![Line::from(Span::styled(
@@ -1186,6 +1421,20 @@ pub fn draw_crashes(frame: &mut Frame, area: Rect, state: &AppState, _focus: &Fo
         items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
     }
 
+    if !state.crash_diagnostics.is_empty() {
+        items.push(ListItem::new(vec![Line::from(Span::styled(
+            "Diagnostic hints:",
+            Style::default().fg(t.accent).bold(),
+        ))]));
+        for hint in &state.crash_diagnostics {
+            items.push(ListItem::new(vec![Line::from(vec![
+                Span::styled("→ ", Style::default().fg(t.accent_dim).bold()),
+                Span::styled(hint.label(), Style::default().fg(t.info)),
+            ])]));
+        }
+        items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
+    }
+
     if state.crash_reports.is_empty() {
         items.push(ListItem::new(vec![Line::from(Span::styled(
             "No crash reports found.",
@@ -1199,6 +1448,213 @@ pub fn draw_crashes(frame: &mut Frame, area: Rect, state: &AppState, _focus: &Fo
 
     let list = List::new(items).block(panel_block("CRASH REPORTS".to_string()));
     frame.render_widget(list, area);
+}
+
+/// Draw the SERVERS section — favourite multiplayer servers with quick
+/// ping (press ENTER to ping the focused row).
+pub fn draw_servers(frame: &mut Frame, area: Rect, state: &AppState, _focus: &FocusManager) {
+    let t = theme::current();
+    let mut items: Vec<ListItem> = Vec::new();
+
+    items.push(ListItem::new(vec![Line::from(vec![
+        Span::styled(
+            "Press ENTER to ping ·  a  to add a new server ·  r  to refresh the list",
+            Style::default().fg(t.text_muted),
+        ),
+    ])]));
+    items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
+
+    if state.servers.is_empty() {
+        items.push(ListItem::new(vec![Line::from(Span::styled(
+            "No servers yet — press 'a' to add one (e.g. hypixel.net:25565).",
+            Style::default().fg(t.text_dim),
+        ))]));
+    } else {
+        for (_i, server) in state.servers.iter().enumerate() {
+            let ping_line = match state.server_pings.get(&server.id) {
+                Some(p) => format!(
+                    "{} · {}/{} · {} ms · {}",
+                    truncate_label(&p.description, 28),
+                    p.players_online,
+                    p.players_max,
+                    p.latency_ms,
+                    p.version_name
+                ),
+                None => "—".to_string(),
+            };
+            let ping_color = match state.server_pings.get(&server.id) {
+                Some(p) if p.latency_ms < 80 => t.success,
+                Some(_) => t.warning,
+                None => t.text_muted,
+            };
+            items.push(ListItem::new(vec![Line::from(vec![
+                Span::styled(
+                    format!("▸ {:<22}", truncate_label(&server.name, 22)),
+                    Style::default().fg(t.accent).bold(),
+                ),
+                Span::styled(
+                    format!(" {:<22}", truncate_label(&server.address, 22)),
+                    Style::default().fg(t.text_dim),
+                ),
+                Span::styled(ping_line, Style::default().fg(ping_color)),
+            ])]));
+        }
+    }
+    items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
+    items.push(ListItem::new(vec![Line::from(Span::styled(
+        "a — Add server",
+        Style::default().fg(t.text_dim),
+    ))]));
+
+    let list = List::new(items).block(panel_block("SERVERS".to_string()));
+    frame.render_widget(list, area);
+}
+
+/// Draw the SCREENSHOTS section — vanilla `screenshots/` directory listing.
+pub fn draw_screenshots(frame: &mut Frame, area: Rect, state: &AppState, _focus: &FocusManager) {
+    let t = theme::current();
+    let mut items: Vec<ListItem> = Vec::new();
+
+    let target = state
+        .selected_instance
+        .as_ref()
+        .map(|i| i.name.clone())
+        .unwrap_or_else(|| "(no instance)".to_string());
+    items.push(ListItem::new(vec![Line::from(vec![
+        Span::styled("Screenshots for ", Style::default().fg(t.text_dim)),
+        Span::styled(target, Style::default().fg(t.accent).bold()),
+    ])]));
+    items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
+
+    if state.screenshots.is_empty() {
+        items.push(ListItem::new(vec![Line::from(Span::styled(
+            "No screenshots yet.",
+            Style::default().fg(t.text_dim),
+        ))]));
+        items.push(ListItem::new(vec![Line::from(Span::styled(
+            "Press F2 in Minecraft to capture one. They land in <instance>/game/screenshots/.",
+            Style::default().fg(t.text_muted),
+        ))]));
+    } else {
+        for entry in &state.screenshots {
+            items.push(ListItem::new(vec![Line::from(vec![
+                Span::styled("▸ ", Style::default().fg(t.accent_dim)),
+                Span::styled(
+                    format!("{:<32}", truncate_label(&entry.path.file_name().unwrap_or_default().to_string_lossy(), 32)),
+                    Style::default().fg(t.text),
+                ),
+                Span::styled(
+                    format!(" {:<16}  ", entry.mtime),
+                    Style::default().fg(t.text_dim),
+                ),
+                Span::styled(
+                    format!("{}", human_bytes(entry.size_bytes)),
+                    Style::default().fg(t.text_muted),
+                ),
+            ])]));
+        }
+    }
+    items.push(ListItem::new(vec![Line::from(Span::raw(" "))]));
+    items.push(ListItem::new(vec![Line::from(Span::styled(
+        "ENTER — Open ·  o  — Open folder",
+        Style::default().fg(t.text_dim),
+    ))]));
+
+    let list = List::new(items).block(panel_block("SCREENSHOTS".to_string()));
+    frame.render_widget(list, area);
+}
+
+fn truncate_label(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{}…", head)
+    }
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
+    let mut v = bytes as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{} B", bytes)
+    } else {
+        format!("{:.1} {}", v, UNITS[i])
+    }
+}
+
+/// Load favourite servers from disk into the state. Safe to call on every
+/// entry into the SERVERS section (cheap).
+pub fn refresh_servers(state: &mut AppState) {
+    state.servers = crate::servers::list_servers();
+}
+
+/// Load screenshots for the currently-selected instance.
+pub fn refresh_screenshots(state: &mut AppState) {
+    use crate::argus::state::ScreenshotEntry;
+    let Some(inst) = state.selected_instance.clone() else {
+        state.screenshots.clear();
+        return;
+    };
+    let dir = crate::argus::backend::BackendBridge::instances_dir()
+        .join(inst.id)
+        .join("game")
+        .join("screenshots");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+                continue;
+            }
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|d| {
+                    if d.as_secs() < 86400 {
+                        format!("{}h ago", d.as_secs() / 3600)
+                    } else {
+                        format!("{}d ago", d.as_secs() / 86400)
+                    }
+                })
+                .unwrap_or_else(|| "?".to_string());
+            out.push(ScreenshotEntry {
+                path,
+                mtime,
+                size_bytes: meta.len(),
+            });
+        }
+    }
+    out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    state.screenshots = out;
+}
+
+// Re-export so app.rs can call into the module without a separate import.
+pub use crate::servers::ServerEntry as _ServerEntryReexport;
+
+// Silence unused-import warnings for items only used by tests.
+#[allow(dead_code)]
+fn _keep_imports() {
+    let _ = ServerEntry::new;
+    let _: fn(&str) -> Result<crate::servers::PingInfo, crate::errors::LauncherError> = ping_server;
 }
 
 /// Draw the command prompt
@@ -1281,7 +1737,7 @@ pub fn draw_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(
         Paragraph::new(vec![Line::from(Span::styled(
             text,
-            Style::default().fg(t.bg).bg(bg).bold(),
+            Style::default().fg(if state.error_message.is_some() { t.bg } else { t.text_dim }).bg(bg).bold(),
         ))])
         .bg(bg),
         area,
@@ -1369,7 +1825,7 @@ pub fn draw_loader_selector(frame: &mut Frame, area: Rect, state: &AppState) {
             .title("CREATE INSTANCE".to_string())
             .title_style(Style::default().fg(t.accent).bold())
             .border_style(Style::default().fg(t.border_focus))
-            .bg(t.panel),
+            .bg(t.bg_panel),
     );
     frame.render_widget(list, modal);
 }
@@ -1468,22 +1924,13 @@ pub fn draw_version_selector(frame: &mut Frame, area: Rect, state: &AppState) {
             Block::new()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(t.border_focus))
-                .bg(t.panel),
+                .bg(t.bg_panel),
         ),
         modal,
     );
 }
 
 /// Shorten a label to `max` visible chars with an ellipsis.
-fn truncate_label(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{}…", head)
-    }
-}
-
 /// Draw the per-mod install version chooser overlay
 pub fn draw_install_version_overlay(frame: &mut Frame, area: Rect, state: &AppState) {
     let t = theme::current();
@@ -1558,7 +2005,7 @@ pub fn draw_install_version_overlay(frame: &mut Frame, area: Rect, state: &AppSt
             Block::new()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(t.border_focus))
-                .bg(t.panel),
+                .bg(t.bg_panel),
         ),
         modal,
     );
@@ -1639,7 +2086,7 @@ pub fn draw_account_selector(frame: &mut Frame, area: Rect, state: &AppState) {
                 .title("ACCOUNTS".to_string())
                 .title_style(Style::default().fg(t.accent).bold())
                 .border_style(Style::default().fg(t.border_focus))
-                .bg(t.panel),
+                .bg(t.bg_panel),
         ),
         modal,
     );
@@ -1690,7 +2137,7 @@ pub fn draw_account_input(frame: &mut Frame, area: Rect, state: &AppState) {
             Block::new()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(t.border_focus))
-                .bg(t.panel),
+                .bg(t.bg_panel),
         ),
         modal,
     );
@@ -1736,16 +2183,16 @@ pub fn draw_help_overlay(frame: &mut Frame, area: Rect, _state: &AppState) {
         ("?", "Toggle this help"),
         ("Q", "Quit ARGUS"),
     ];
-    let items: Vec<Line> = rows
-        .iter()
-        .map(|(key, desc)| {
-            Line::from(vec![
-                Span::styled(format!("{:>17}", key), Style::default().fg(t.accent).bold()),
-                Span::styled("  ", Style::default()),
-                Span::styled(*desc, Style::default().fg(t.text)),
-            ])
-        })
-        .collect();
+    let mut items: Vec<Line> = vec![Line::from("")];
+    for (key, desc) in &rows {
+        items.push(Line::from(vec![
+            Span::styled(
+                format!(" {:>14} ", key),
+                Style::default().fg(t.bg).bg(t.accent).bold(),
+            ),
+            Span::styled(format!("{}  ", desc), Style::default().fg(t.text)),
+        ]));
+    }
 
     frame.render_widget(
         Paragraph::new(items).block(
@@ -1754,7 +2201,7 @@ pub fn draw_help_overlay(frame: &mut Frame, area: Rect, _state: &AppState) {
                 .title("KEYBOARD SHORTCUTS  (? or ESC to close)".to_string())
                 .title_style(Style::default().fg(t.accent).bold())
                 .border_style(Style::default().fg(t.border_focus))
-                .bg(t.panel),
+                .bg(t.bg_panel),
         ),
         modal,
     );

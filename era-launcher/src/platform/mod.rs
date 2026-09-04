@@ -21,11 +21,18 @@ impl Paths {
             cache,
         }
     }
+
     pub fn config_dir(&self) -> &std::path::Path {
         &self.config
     }
     pub fn instances_dir(&self) -> &std::path::Path {
         &self.instances
+    }
+}
+
+impl Default for Paths {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

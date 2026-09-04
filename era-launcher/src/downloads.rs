@@ -102,6 +102,12 @@ impl DownloadManager {
     }
 }
 
+impl Default for DownloadManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

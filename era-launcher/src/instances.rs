@@ -38,7 +38,7 @@ impl Default for InstanceConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InstanceManager {
     pub instances: Vec<InstanceConfig>,
 }

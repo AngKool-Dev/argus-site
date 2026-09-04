@@ -16,6 +16,8 @@ use crate::argus::ui;
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::env;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -48,6 +50,7 @@ pub struct ArgusApp {
     update_rx: Option<std::sync::mpsc::Receiver<crate::argus::update::UpdateCheckResult>>,
     update_quit_rx: Option<std::sync::mpsc::Receiver<()>>,
     mod_update_rx: Option<std::sync::mpsc::Receiver<Vec<crate::argus::state::UpdatableMod>>>,
+    _last_resize_size: Option<(u16, u16)>,
 }
 
 impl ArgusApp {
@@ -65,6 +68,7 @@ impl ArgusApp {
             update_rx: None,
             update_quit_rx: None,
             mod_update_rx: None,
+            _last_resize_size: None,
         })
     }
 
@@ -74,6 +78,14 @@ impl ArgusApp {
         self.refresh_data();
         self.setup_focus_targets();
         let current_version = self.state.current_version;
+        // Clear any pending update-pending marker. The marker is written when
+        // an update is staged; if the process is running again it means either
+        // the .bat helper failed to apply the update, or it succeeded and the
+        // relaunched binary is now running. In both cases we re-check (the
+        // version check will correctly report up-to-date if the .bat succeeded).
+        if let Ok(path) = std::env::var("ERA_LAUNCHER_UPDATE_PENDING") {
+            let _ = std::fs::remove_file(&path);
+        }
         let last_check = self.state.last_update_check;
         self.update_rx = Some(crate::argus::update::spawn_check(
             current_version,
@@ -81,7 +93,8 @@ impl ArgusApp {
         ));
         self.renderer.render(&self.state, &self.focus)?;
 
-        let poll_timeout = Duration::from_millis(100);
+        let poll_timeout = Duration::from_millis(1000);
+        let mut render_needed = true;
 
         std::panic::set_hook(Box::new(|info| {
             let crash_dir = crate::platform::Paths::new().data_local.join("crash");
@@ -120,7 +133,15 @@ impl ArgusApp {
                             );
                             self.state
                                 .set_loading(true, Some(format!("Downloading update v{}...", tag)));
-                            let _ = self.renderer.render(&self.state, &self.focus);
+                            self.state.log(
+                                LogLevel::Info,
+                                "ARGUS",
+                                &format!(
+                                    "Update available: {} -- installing and restarting",
+                                    tag
+                                ),
+                            );
+                            self.renderer.render(&self.state, &self.focus)?;
                             let current_exe = match std::env::current_exe() {
                                 Ok(p) => p,
                                 Err(e) => {
@@ -130,34 +151,57 @@ impl ArgusApp {
                                     continue;
                                 }
                             };
-                            let (quit_tx, quit_rx) = std::sync::mpsc::channel();
-                            self.update_quit_rx = Some(quit_rx);
-                            std::thread::spawn(move || {
-                                let dest = current_exe
-                                    .parent()
-                                    .map(|p| p.to_path_buf())
-                                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                                    .join("era-launcher.new");
-                                let result = (|| -> Result<(), String> {
-                                    let url = crate::argus::update::fetch_latest_asset_url()?;
-                                    crate::argus::update::download_asset(&url, &dest)?;
-                                    let helper = crate::argus::update::create_update_helper(
-                                        &current_exe,
-                                        &dest,
-                                    )?;
-                                    #[cfg(target_env = "msvc")]
-                                    let mut cmd = std::process::Command::new(helper)
-                                        .creation_flags(0x00000010);
-                                    #[cfg(not(target_env = "msvc"))]
-                                    let mut cmd = std::process::Command::new(helper);
-                                    let _ = cmd.spawn();
-                                    Ok(())
-                                })();
-                                let _ = quit_tx.send(());
-                                if let Err(e) = result {
-                                    eprintln!("Update failed: {}", e);
+                            // Run the download + helper-spawn synchronously so we know
+                            // it's staged before we exit. The .bat helper will copy the
+                            // new exe over us after we exit, then relaunch.
+                            let dest = current_exe
+                                .parent()
+                                .map(|p| p.to_path_buf())
+                                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                                .join("era-launcher.new");
+                            let result: Result<(), String> = (|| -> Result<(), String> {
+                                let url = crate::argus::update::fetch_latest_asset_url()?;
+                                crate::argus::update::download_asset(&url, &dest)?;
+                                crate::argus::update::create_update_helper(&current_exe, &dest)?;
+                                Ok(())
+                            })();
+                            if let Err(e) = result {
+                                let _ = std::fs::remove_file(&dest);
+                                eprintln!("Update failed: {}", e);
+                                self.state.set_loading(false, None);
+                                self.state.set_error(format!("Update failed: {}", e));
+                            } else {
+                                // Spawn the helper in a fully detached process so
+                                // it survives our exit, then exit immediately. The
+                                // helper waits for us to disappear, copies the new
+                                // exe over us, and relaunches.
+                                #[cfg(windows)]
+                                let helper_path = current_exe.with_extension("bat");
+                                #[cfg(not(windows))]
+                                let helper_path = current_exe.with_extension("update.sh");
+                                #[cfg(not(windows))]
+                                let mut helper = std::process::Command::new("setsid");
+                                #[cfg(not(windows))]
+                                {
+                                    helper
+                                    .arg("-f")
+                                    .arg("sh")
+                                    .arg("-c")
+                                    .arg(format!(
+                                        "nohup '{}' >/dev/null 2>&1 &",
+                                        helper_path.to_string_lossy()
+                                    ));
                                 }
-                            });
+                                #[cfg(windows)]
+                                let mut helper = {
+                                    let mut cmd = std::process::Command::new(&helper_path);
+                                    // DETACHED_PROCESS = 0x00000008
+                                    cmd.creation_flags(0x00000008);
+                                    cmd
+                                };
+                                let _ = helper.spawn();
+                                self.state.should_quit = true;
+                            }
                         }
                         crate::argus::update::UpdateCheckResult::CheckFailed(err) => {
                             self.state.update_check =
@@ -206,13 +250,24 @@ impl ArgusApp {
                 continue;
             }
 
-            // Drive the loading spinner animation
-            self.state.tick = self.state.tick.wrapping_add(1);
+            // Drive the loading spinner animation — only when loading
+            let needs_spinner = self.state.loading;
+            if needs_spinner {
+                self.state.tick = self.state.tick.wrapping_add(1);
+            }
 
-            // Render updated state
-            self.renderer.render(&self.state, &self.focus)?;
-            // Read input events
-            if let Some(event) = self.renderer.read_event(poll_timeout) {
+            // Only render when state has changed or animation needs updating
+            if render_needed || needs_spinner {
+                self.renderer.render(&self.state, &self.focus)?;
+                render_needed = false;
+            }
+            // Read input events with adaptive timeout — longer when idle
+            let effective_timeout = if needs_spinner {
+                Duration::from_millis(50)
+            } else {
+                poll_timeout
+            };
+            if let Some(event) = self.renderer.read_event(effective_timeout) {
                 match event {
                     Event::Key(key) => {
                         // Only process key press events (not release or repeat)
@@ -247,6 +302,11 @@ impl ArgusApp {
                     }
                     _ => {}
                 }
+                render_needed = true;
+            }
+            // When idle (no events), sleep briefly to reduce CPU usage
+            if !render_needed && !needs_spinner {
+                std::thread::sleep(Duration::from_millis(50));
             }
             if self.state.should_quit {
                 break;
@@ -300,6 +360,19 @@ impl ArgusApp {
             BackendBridge::list_installed_content(selected_id.as_deref());
         self.state.worlds = BackendBridge::list_worlds(selected_id.as_deref());
 
+        // Crash reports + diagnostics
+        self.state.crash_reports = BackendBridge::scan_crash_reports(selected_id.as_deref());
+        if let Some(first) = self.state.crash_reports.first() {
+            let text = std::fs::read_to_string(&first.path).unwrap_or_default();
+            self.state.crash_diagnostics = crate::crashes::diagnose(&text);
+        } else {
+            self.state.crash_diagnostics.clear();
+        }
+
+        // Servers + screenshots
+        ui::refresh_servers(&mut self.state);
+        ui::refresh_screenshots(&mut self.state);
+
         // Accounts for the SETTINGS picker and header display
         let active_id = BackendBridge::active_account().map(|a| a.id);
         self.state.accounts = BackendBridge::list_accounts()
@@ -315,12 +388,10 @@ impl ArgusApp {
         });
 
         // Update runtime state from tracker
-        if self.state.runtime_state == RuntimeState::Running {
-            if !self.tracker.is_running() {
-                self.state.runtime_state = RuntimeState::Stopped;
-                self.state
-                    .log(LogLevel::Info, "BACKEND", "Minecraft process exited");
-            }
+        if self.state.runtime_state == RuntimeState::Running && !self.tracker.is_running() {
+            self.state.runtime_state = RuntimeState::Stopped;
+            self.state
+                .log(LogLevel::Info, "BACKEND", "Minecraft process exited");
         }
 
         // Poll process output
@@ -371,11 +442,9 @@ impl ArgusApp {
         use crate::argus::state::DiscoverTab;
         match self.state.current_section {
             Section::Home => {
-                self.focus.register("home_launch", "Launch Instance");
                 self.focus.register("home_create", "Create Instance");
-                self.focus.register("home_mods", "Browse Mods");
                 self.focus.register("home_open", "Open Folder");
-                self.focus.register("home_java", "Java Settings");
+                self.focus.register("home_play", "Play");
             }
             Section::Instances => {
                 if self.state.instances.is_empty() {
@@ -448,11 +517,27 @@ impl ArgusApp {
                     }
                 }
             }
+            Section::Servers => {
+                if self.state.servers.is_empty() {
+                    self.focus.register("servers_empty", "No servers yet");
+                } else {
+                    for (i, _) in self.state.servers.iter().enumerate() {
+                        self.focus.register(
+                            &format!("server_{}", i),
+                            &format!("Server {}", i + 1),
+                        );
+                    }
+                }
+                self.focus.register("server_add", "Add server");
+            }
             Section::Logs => {
                 if self.state.logs.is_empty() {
                     self.focus.register("logs_empty", "No log entries");
                 } else {
                     self.focus.register("logs_list", "Log Entries");
+                }
+                if self.state.live_log_view {
+                    self.focus.register("logs_live", "Live log");
                 }
             }
             Section::Crashes => {
@@ -460,6 +545,22 @@ impl ArgusApp {
                     self.focus.register("crashes_empty", "No crash reports");
                 } else {
                     self.focus.register("crashes_list", "Crash Reports");
+                    self.focus.register("crashes_copy", "Copy report");
+                    self.focus.register("crashes_delete", "Delete report");
+                    self.focus.register("crashes_open", "Open folder");
+                }
+            }
+            Section::Screenshots => {
+                if self.state.screenshots.is_empty() {
+                    self.focus.register("screenshots_empty", "No screenshots");
+                } else {
+                    for (i, _) in self.state.screenshots.iter().enumerate() {
+                        self.focus.register(
+                            &format!("screenshot_{}", i),
+                            &format!("Screenshot {}", i + 1),
+                        );
+                    }
+                    self.focus.register("screenshots_open", "Open folder");
                 }
             }
             Section::Settings => {
@@ -485,6 +586,7 @@ impl ArgusApp {
     fn handle_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         // Help overlay swallows everything except its close keys.
         if self.state.help_overlay {
@@ -591,6 +693,15 @@ impl ArgusApp {
             KeyCode::Char('l') if ctrl => {
                 self.open_command_prompt();
             }
+            // Live log tail toggle (Shift+L arrives as uppercase 'L' when shift
+            // is held, but crossterm still delivers Char('l') — bind under a
+            // different letter to avoid the conflict with the Logs section
+            // shortcut and Ctrl+L command prompt opener).
+            KeyCode::Char('L')
+                if shift && !ctrl && !alt && self.state.current_section == Section::Logs =>
+            {
+                self.handle_activate("logs_live");
+            }
             // Create Instance shortcut (when on HOME section)
             KeyCode::Char('c') if !ctrl && !alt && self.state.current_section == Section::Home => {
                 self.handle_activate("home_create");
@@ -620,14 +731,13 @@ impl ArgusApp {
                 let showing = self.state.show_installed_discover;
                 self.rebuild_targets_preserving_focus();
                 let n = self.state.discover_hidden_count;
-                self.state.set_status(format!(
-                    "{}",
+                self.state.set_status(
                     if showing {
                         format!("Showing installed projects too ({n} marked ✓)")
                     } else {
                         format!("Installed projects hidden again ({n})")
                     }
-                ));
+                );
             }
             // Delete selected instance
             KeyCode::Char('x')
@@ -638,6 +748,33 @@ impl ArgusApp {
             // Remove the focused installed file (mods/shaders/resourcepacks)
             KeyCode::Char('x') if !ctrl && !alt && self.state.current_section == Section::Mods => {
                 self.remove_focused_content();
+            }
+            // Worlds section shortcuts
+            KeyCode::Char('b')
+                if !ctrl && !alt && self.state.current_section == Section::Worlds =>
+            {
+                self.backup_focused_world();
+            }
+            KeyCode::Char('o')
+                if !ctrl && !alt && self.state.current_section == Section::Worlds =>
+            {
+                self.open_focused_world_folder();
+            }
+            KeyCode::Char('O') | KeyCode::Char('R')
+                if shift && !ctrl && !alt && self.state.current_section == Section::Worlds =>
+            {
+                self.open_worlds_save_folder();
+            }
+            KeyCode::Char('d')
+                if !ctrl && !alt && self.state.current_section == Section::Worlds =>
+            {
+                self.delete_focused_world();
+            }
+            // Add server
+            KeyCode::Char('a')
+                if !ctrl && !alt && self.state.current_section == Section::Servers =>
+            {
+                self.handle_activate("server_add");
             }
             // Section shortcuts
             KeyCode::Char(c) if !ctrl && !alt => {
@@ -855,10 +992,8 @@ impl ArgusApp {
                 KeyCode::Backspace if !ctrl => {
                     self.state.account_input.pop();
                 }
-                KeyCode::Char(c) if !ctrl => {
-                    if self.state.account_input.len() < 16 {
-                        self.state.account_input.push(c);
-                    }
+                KeyCode::Char(c) if !ctrl && self.state.account_input.len() < 16 => {
+                    self.state.account_input.push(c);
                 }
                 _ => {}
             }
@@ -1266,12 +1401,20 @@ impl ArgusApp {
 
     /// Handle terminal resize
     fn handle_resize(&mut self, cols: u16, rows: u16) {
-        let _ = (cols, rows);
-        self.state.log(
-            crate::argus::state::LogLevel::Info,
-            "ARGUS",
-            "Terminal resized",
-        );
+        // Skip resize events that we generated ourselves via set_buffer_size
+        if Renderer::is_spurious_resize(cols, rows) {
+            return;
+        }
+        let prev = self._last_resize_size;
+        self.renderer.on_resize(cols, rows);
+        if Some((cols, rows)) != prev {
+            self.state.log(
+                crate::argus::state::LogLevel::Debug,
+                "ARGUS",
+                "Terminal resized",
+            );
+        }
+        self._last_resize_size = Some((cols, rows));
     }
 
     /// Navigate to the previous top-level section (navbar only)
@@ -1443,6 +1586,9 @@ impl ArgusApp {
             's' => Some(Section::Settings),
             'l' => Some(Section::Logs),
             'w' => Some(Section::Worlds),
+            'v' => Some(Section::Servers),
+            'p' => Some(Section::Screenshots),
+            'c' => Some(Section::Crashes),
             _ => None,
         };
 
@@ -1624,14 +1770,11 @@ impl ArgusApp {
             "home_create" => {
                 self.home_create();
             }
-            "home_mods" => {
-                self.navigate_to_section(Section::Mods);
+            "home_play" => {
+                self.home_launch();
             }
             "home_open" => {
                 self.open_instance_folder();
-            }
-            "home_java" => {
-                self.navigate_to_section(Section::Settings);
             }
             "disc_search" => {
                 self.activate_search();
@@ -1708,6 +1851,63 @@ impl ArgusApp {
             }
             id if id.starts_with("settings_") => {
                 // Generic settings handler
+            }
+            id if id.starts_with("server_") => {
+                if let Some(idx_str) = id.strip_prefix("server_") {
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        self.activate_server(idx);
+                    }
+                }
+            }
+            "server_add" => {
+                self.open_server_add();
+            }
+            "screenshots_open" => {
+                let dir = BackendBridge::instances_dir()
+                    .join(
+                        self.state
+                            .selected_instance
+                            .as_ref()
+                            .map(|i| i.id.clone())
+                            .unwrap_or_default(),
+                    )
+                    .join("game")
+                    .join("screenshots");
+                if open_in_file_manager(&dir) {
+                    self.state.set_status(format!(
+                        "Opened: {}",
+                        dir.display()
+                    ));
+                } else {
+                    self.state.set_error("No screenshots folder yet".to_string());
+                }
+            }
+            id if id.starts_with("screenshot_") => {
+                if let Some(idx_str) = id.strip_prefix("screenshot_") {
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        if let Some(entry) = self.state.screenshots.get(idx) {
+                            let _ = open_in_file_manager(&entry.path);
+                        }
+                    }
+                }
+            }
+            "crashes_copy" => self.copy_selected_crash(),
+            "crashes_delete" => self.delete_selected_crash(),
+            "crashes_open" => {
+                if let Some(cr) = self.state.crash_reports.first() {
+                    if let Some(parent) = cr.path.parent() {
+                        let _ = open_in_file_manager(parent);
+                    }
+                }
+            }
+"logs_live" => {
+                self.state.live_log_view = !self.state.live_log_view;
+self.state.set_status(if self.state.live_log_view {
+                    "Live log tail enabled — Shift+L to disable".to_string()
+                } else {
+                    "Live log tail disabled".to_string()
+                });
+                self.rebuild_targets_preserving_focus();
             }
             _ => {}
         }
@@ -2116,8 +2316,8 @@ impl ArgusApp {
         let stdout_rx = self.tracker.take_stdout_rx();
         let stderr_rx = self.tracker.take_stderr_rx();
 
-        // Tear down the TUI and hide the console window so only the game is
-        // visible while it runs.
+        // Tear down the TUI and hide the console window so only the
+        // game is visible while it runs.
         self.renderer.deinit()?;
         win_console::hide();
 
@@ -2131,15 +2331,45 @@ impl ArgusApp {
             pid_label
         );
 
-        // Drain the game's piped output into a buffer so the launcher LOGS
-        // view shows what happened (crashes, errors) after it returns. We do
-        // NOT write it to the terminal.
+        // Write any captured game output to `<instance>/logs/argus-live.log`
+        // so it can be inspected via the LOGS section's live tail view. On
+        // Windows, the console-hide above means we cannot render the lines
+        // in-TUI; the file is the only inspection channel.
         let log_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let mut handles = Vec::new();
+        let live_log_path = self
+            .state
+            .selected_instance
+            .as_ref()
+            .map(|inst| {
+                crate::platform::Paths::new()
+                    .instances_dir()
+                    .join(&inst.id)
+                    .join("logs")
+                    .join("argus-live.log")
+            });
+        if let Some(ref path) = live_log_path {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            // Truncate previous run
+            let _ = std::fs::write(path, "");
+        }
         if let Some(rx) = stdout_rx {
             let buf = Arc::clone(&log_buffer);
+            let path = live_log_path.clone();
             handles.push(std::thread::spawn(move || {
                 while let Ok(line) = rx.recv() {
+                    if let Some(ref p) = path {
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(p)
+                        {
+                            use std::io::Write;
+                            let _ = writeln!(f, "{}", line);
+                        }
+                    }
                     if let Ok(mut b) = buf.lock() {
                         b.push(line);
                     }
@@ -2148,8 +2378,19 @@ impl ArgusApp {
         }
         if let Some(rx) = stderr_rx {
             let buf = Arc::clone(&log_buffer);
+            let path = live_log_path.clone();
             handles.push(std::thread::spawn(move || {
                 while let Ok(line) = rx.recv() {
+                    if let Some(ref p) = path {
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(p)
+                        {
+                            use std::io::Write;
+                            let _ = writeln!(f, "{}", line);
+                        }
+                    }
                     if let Ok(mut b) = buf.lock() {
                         b.push(line);
                     }
@@ -2187,6 +2428,7 @@ impl ArgusApp {
         self.state.runtime_state = RuntimeState::Stopped;
         self.state.set_loading(false, None);
         self.tracker.clear_after_game();
+        self.state.live_log_path = live_log_path;
         self.state.set_status(exit_msg.clone());
         self.state.log(
             LogLevel::Info,
@@ -2275,6 +2517,175 @@ impl ArgusApp {
         } else {
             self.state
                 .set_error(format!("Failed to open folder: {}", target.display()));
+        }
+    }
+
+    // ===== Server Management =====
+
+    fn activate_server(&mut self, idx: usize) {
+        let Some(server) = self.state.servers.get(idx).cloned() else {
+            return;
+        };
+        let key = server.id.clone();
+        let addr = server.address.clone();
+        if self.state.server_pinging {
+            return;
+        }
+        self.state.server_pinging = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = crate::servers::ping_server(&addr);
+            let _ = tx.send(result);
+        });
+        self.state.log(
+            LogLevel::Info,
+            "SERVERS",
+            &format!("Pinging {}...", server.address),
+        );
+        let pings = &mut self.state.server_pings;
+        match rx.recv() {
+            Ok(Ok(info)) => {
+                pings.insert(key, info);
+            }
+            Ok(Err(e)) => {
+                self.state.set_error(format!("Ping failed: {}", e));
+            }
+            Err(_) => {}
+        }
+        self.state.server_pinging = false;
+        self.rebuild_targets_preserving_focus();
+    }
+
+    fn open_server_add(&mut self) {
+        self.state.server_add_open = true;
+        self.state.server_add_name.clear();
+        self.state.server_add_address.clear();
+    }
+
+    /// Copy the most recent crash report's text to the clipboard. Falls back
+    /// to writing `<data_local>/.crash-clipboard.txt` when no clipboard tool
+    /// is available (Linux without xclip/xsel).
+    fn copy_selected_crash(&mut self) {
+        let Some(cr) = self.state.crash_reports.first().cloned() else {
+            self.state
+                .set_status("No crash report selected".to_string());
+            return;
+        };
+        let text = std::fs::read_to_string(&cr.path).unwrap_or_default();
+        if copy_to_clipboard(&text) {
+            self.state
+                .set_status("Copied crash report to clipboard".to_string());
+            self.state.log(
+                LogLevel::Info,
+                "CRASHES",
+                "Copied selected crash report to clipboard",
+            );
+        } else {
+            let fallback = crate::platform::Paths::new()
+                .data_local
+                .join(".crash-clipboard.txt");
+            let _ = std::fs::write(&fallback, &text);
+            self.state.set_status(format!(
+                "Clipboard unavailable — wrote to {}",
+                fallback.display()
+            ));
+        }
+    }
+
+    fn delete_selected_crash(&mut self) {
+        let Some(cr) = self.state.crash_reports.first().cloned() else {
+            return;
+        };
+        if std::fs::remove_file(&cr.path).is_ok() {
+            self.state.log(
+                LogLevel::Info,
+                "CRASHES",
+                &format!("Deleted {}", cr.path.display()),
+            );
+            self.refresh_data();
+            self.rebuild_targets_preserving_focus();
+        } else {
+            self.state
+                .set_error(format!("Failed to delete {}", cr.path.display()));
+        }
+    }
+
+    // ===== Worlds =====
+
+    fn focused_world(&self) -> Option<String> {
+        let id = self.focus.current().map(|t| t.id.clone())?;
+        if !id.starts_with("world_") {
+            return None;
+        }
+        let idx = id.trim_start_matches("world_").parse::<usize>().ok()?;
+        self.state.worlds.get(idx).cloned()
+    }
+
+    fn backup_focused_world(&mut self) {
+        let Some(inst) = self.state.selected_instance.clone() else {
+            self.state
+                .set_status("Select an instance first (↑↓ on INSTANCES)".to_string());
+            return;
+        };
+        let Some(world) = self.focused_world() else {
+            self.state.set_status("No world focused".to_string());
+            return;
+        };
+        match crate::worlds::backup_world(&inst.id, &world) {
+            Ok(path) => {
+                self.state.log(
+                    LogLevel::Info,
+                    "WORLDS",
+                    &format!("Backed up '{}' to {}", world, path.display()),
+                );
+                self.state
+                    .set_status(format!("Backed up to {}", path.display()));
+            }
+            Err(e) => self.state.set_error(format!("Backup failed: {}", e)),
+        }
+    }
+
+    fn open_focused_world_folder(&mut self) {
+        let Some(inst) = self.state.selected_instance.clone() else {
+            return;
+        };
+        let Some(world) = self.focused_world() else {
+            return;
+        };
+        let dir = crate::platform::Paths::new()
+            .instances_dir()
+            .join(inst.id)
+            .join("saves")
+            .join(&world);
+        let _ = open_in_file_manager(&dir);
+    }
+
+    fn open_worlds_save_folder(&mut self) {
+        let Some(inst) = self.state.selected_instance.clone() else {
+            return;
+        };
+        let dir = crate::platform::Paths::new()
+            .instances_dir()
+            .join(inst.id)
+            .join("saves");
+        let _ = open_in_file_manager(&dir);
+    }
+
+    fn delete_focused_world(&mut self) {
+        let Some(inst) = self.state.selected_instance.clone() else {
+            return;
+        };
+        let Some(world) = self.focused_world() else {
+            return;
+        };
+        match crate::worlds::delete_world(&inst.id, &world) {
+            Ok(()) => {
+                self.state
+                    .log(LogLevel::Info, "WORLDS", &format!("Deleted '{}'", world));
+                self.refresh_data();
+                self.rebuild_targets_preserving_focus();
+            }
+            Err(e) => self.state.set_error(format!("Delete failed: {}", e)),
         }
     }
 
@@ -2669,6 +3080,19 @@ impl ArgusApp {
 impl Default for ArgusApp {
     fn default() -> Self {
         Self::new().expect("Failed to initialize ARGUS")
+    }
+}
+
+/// Copy text to the system clipboard via `arboard`. Returns false if no
+/// clipboard tool is available (e.g. Linux without xclip/xsel/arboard's
+/// required libs).
+fn copy_to_clipboard(text: &str) -> bool {
+    match arboard::Clipboard::new() {
+        Ok(mut cb) => match cb.set_text(text.to_string()) {
+            Ok(()) => true,
+            Err(_) => false,
+        },
+        Err(_) => false,
     }
 }
 
