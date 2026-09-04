@@ -1,6 +1,6 @@
 [package]
 name = "era-launcher"
-version = "0.1.7"
+version = "0.1.11"
 description = "A modern Minecraft launcher"
 authors = ["Angkool-Dev"]
 edition = "2024"
@@ -39,8 +39,13 @@ tar = "0.4"
 crossterm = "0.29"
 ratatui = "0.30"
 clap = { version = "4", features = ["derive"] }
+
 md-5 = "0.10"
 http = "1"
+
+[target.'cfg(windows)'.dependencies]
+crossterm_winapi = "0.9"
+winapi = { version = "0.3", features = ["wincon", "winuser", "winbase"] }
 
 [[bin]]
 name = "era-launcher"
