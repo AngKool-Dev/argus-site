@@ -58,3 +58,29 @@ document.querySelectorAll("[data-download]").forEach((btn) => {
     window.location.href = ARGUS_DOWNLOAD_URL;
   });
 });
+
+const navToggle = document.querySelector(".nav-toggle");
+const navMenu = document.querySelector(".nav-menu");
+const navOverlay = document.querySelector(".nav-overlay");
+
+function closeNav() {
+  navMenu.classList.remove("is-open");
+  navToggle.setAttribute("aria-expanded", "false");
+  navOverlay.classList.remove("is-visible");
+}
+
+if (navToggle && navMenu) {
+  navToggle.addEventListener("click", () => {
+    const isOpen = navMenu.classList.toggle("is-open");
+    navToggle.setAttribute("aria-expanded", String(isOpen));
+    navOverlay.classList.toggle("is-visible", isOpen);
+  });
+}
+
+if (navOverlay) {
+  navOverlay.addEventListener("click", closeNav);
+}
+
+document.querySelectorAll(".nav-menu a").forEach((link) => {
+  link.addEventListener("click", closeNav);
+});
