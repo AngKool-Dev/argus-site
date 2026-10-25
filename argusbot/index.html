@@ -1,0 +1,289 @@
+<!-- cache-bust: 20261025-0612 -->
+
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArgusBot — Minecraft farming bot</title>
+  <meta name="description" content="ArgusBot is a client-side Minecraft mod for automated farming, mining, and idle tasks. Built for Fabric 26.2 with on-screen notifications only." />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="icon" href="/assets/icon.svg" type="image/svg+xml" />
+</head>
+
+<body>
+  <nav class="navbar" aria-label="Main">
+    <a href="/" class="nav-logo" aria-label="ARGUS Home">
+      <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+        <path d="M2 17l10 5 10-5"/>
+        <path d="M2 12l10 5 10-5"/>
+      </svg>
+      <span class="logo-text">ARGUS</span>
+    </a>
+    <button class="nav-toggle" aria-expanded="false" aria-controls="nav-menu" aria-label="Toggle navigation">
+      <span class="nav-toggle-bar"></span>
+      <span class="nav-toggle-bar"></span>
+      <span class="nav-toggle-bar"></span>
+    </button>
+    <ul class="nav-menu" id="nav-menu">
+      <li><a href="/" class="nav-link">Home</a></li>
+      <li><a href="/#plugins" class="nav-link">Plugins</a></li>
+      <li><a href="/argusbot" class="nav-link nav-link--active">ArgusBot</a></li>
+      <li><a href="/download" class="nav-link">Download</a></li>
+      <li><a href="https://github.com/AngKool-Dev/argus-releases" class="nav-link nav-link--external" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+      <li><a href="https://discord.gg/67BSKR8p3A" class="nav-link nav-link--discord" target="_blank" rel="noopener noreferrer" aria-label="Join Discord">
+        <svg class="nav-discord-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.74 19.74 0 0 0 4.18 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.1 13.1 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.771 1.364 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.947 2.418-2.157 2.418z"/>
+        </svg>
+        Discord
+      </a></li>
+    </ul>
+  </nav>
+
+  <div class="nav-overlay" aria-hidden="true"></div>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-bg" aria-hidden="true">
+        <div class="hero-grid"></div>
+        <div class="hero-glow"></div>
+      </div>
+      <div class="container">
+        <div class="hero-content">
+          <div class="hero-badge">
+            <span class="hero-badge-dot"></span>
+            Fabric Mod
+          </div>
+          <div class="hero-badge hero-badge--version">
+            v0.2.0
+          </div>
+          <h1 id="hero-title" class="hero-title">
+            <span class="hero-title-main">ArgusBot</span>
+            <span class="hero-title-sub">Client-side Minecraft bot</span>
+          </h1>
+          <p class="hero-desc">A client-side farming and mining bot for Minecraft 26.2. Automates Skyblock farming with human-like behavior: auto-farm, auto-mine, combat, anti-AFK, idle walking, and chest depositing. On-screen notifications only — never touches public chat.</p>
+          <div class="hero-actions">
+            <a href="/download/argusbot-0.2.0.jar" class="btn btn-primary">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Download JAR
+            </a>
+          </div>
+          <div class="hero-meta">
+            <span class="hero-meta-item">Minecraft 26.2</span>
+            <span class="hero-meta-sep">—</span>
+            <span class="hero-meta-item">Fabric</span>
+            <span class="hero-meta-sep">—</span>
+            <span class="hero-meta-item">Client-side</span>
+            <span class="hero-meta-sep">—</span>
+            <span class="hero-meta-item">MIT License</span>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="terminal-window">
+            <div class="terminal-header">
+              <span class="terminal-dot terminal-dot--red"></span>
+              <span class="terminal-dot terminal-dot--yellow"></span>
+              <span class="terminal-dot terminal-dot--green"></span>
+              <span class="terminal-title">argusbot</span>
+            </div>
+            <div class="terminal-body">
+              <div class="terminal-line"><span class="terminal-prompt">></span> Bot started</div>
+              <div class="terminal-line terminal-line--muted">  Mode: auto-farm + idle walking</div>
+              <div class="terminal-line terminal-line--accent">> Scanning crops...</div>
+              <div class="terminal-line terminal-line--success">Found 32 mature wheat plots</div>
+              <div class="terminal-line terminal-line--accent">> Harvesting...</div>
+              <div class="terminal-line terminal-line--success">32 wheat collected. Replanting...</div>
+              <div class="terminal-line terminal-line--muted">  HUD: Farming active | Home set</div>
+              <div class="terminal-cursor"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="features" aria-labelledby="features-title">
+      <div class="container">
+        <h2 id="features-title" class="section-title"><span class="gradient-text">Features</span></h2>
+        <p class="section-subtitle">Automation that respects the client boundary. No server mods required.</p>
+        <div class="features-grid">
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20z"/><path d="M2 12h20"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--content">Farming</span>
+            <h3 class="feature-title">Auto Farm</h3>
+            <p class="feature-desc">Scans for mature crops, breaks them through the face/break/verify state chain, chains consecutive harvests in-lane, collects drops, and deposits into chests. Reach-capped at 3.0 blocks.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--performance">Mining</span>
+            <h3 class="feature-title">Auto Mine</h3>
+            <p class="feature-desc">Mines generator blocks on Skyblock islands and Survival worlds. Allowlist of stone family + ores, never cobblestone. No movement key pressed while mining.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--automation">Idle</span>
+            <h3 class="feature-title">Idle Walking</h3>
+            <p class="feature-desc">Wanders safely when no active task is running. Includes fall and drowning guards so the bot does not kill itself between jobs.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--rpg">Combat</span>
+            <h3 class="feature-title">Monster Fighting</h3>
+            <p class="feature-desc">Stance-based approach/strike behaviour with nearest-target selection, crit sequences (sprint-off, jump, swing on fall), bounded aiming, and aim-assist mode.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1v6m0 0l2-2m-2 2-2-2z"/><path d="M4.27 4.27L3 5.54l4 4-4 4 1.27 1.27 4-4-4-4z"/><path d="M12 17.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11z"/><path d="M19 9v6"/><path d="M9 19h6"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--security">Anti-AFK</span>
+            <h3 class="feature-title">Anti-AFK Solver</h3>
+            <p class="feature-desc">Detects open container menus with stained glass panes and click-me items, then clicks via container input. Licensing-gated.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--interface">Privacy</span>
+            <h3 class="feature-title">No Public Chat</h3>
+            <p class="feature-desc">All notifications use toasts, a HUD overlay, or the action bar. ArgusBot never sends messages to public chat.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--security">Safety</span>
+            <h3 class="feature-title">Reach Guard</h3>
+            <p class="feature-desc">Every break attempt is checked against a 3.0-block reach limit. Rejections are logged for review.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>
+              </svg>
+            </div>
+            <span class="feature-badge feature-badge--world">Diagnostics</span>
+            <h3 class="feature-title">Debug Overlay</h3>
+            <p class="feature-desc">DebugLogger with session markers, action rate monitor counters, HUD overlay, toasts, action bar, and debug expand keybind.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="how-it-works" aria-labelledby="capabilities-title">
+      <div class="container">
+        <h2 id="capabilities-title" class="section-title">Capabilities</h2>
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">01</span>
+            <h3 class="step-title">Replanting</h3>
+            <p class="step-desc">Post-placement hold, bounded turn settlement, dig-wait safety, and read-only recheck diagnostics. Exactly one interaction + one swing per placement.</p>
+          </div>
+          <div class="step-sep" aria-hidden="true"></div>
+          <div class="step">
+            <span class="step-num">02</span>
+            <h3 class="step-title">Task Arbitration</h3>
+            <p class="step-desc">Enabled tasks ranked (mining > farming > idle). Standing still beats moving. Deferred tasks start when the active one finishes.</p>
+          </div>
+          <div class="step-sep" aria-hidden="true"></div>
+          <div class="step">
+            <span class="step-num">03</span>
+            <h3 class="step-title">Human-Like Pacing</h3>
+            <p class="step-desc">Bounded rotations, reaction delays, swing gating, cooldowns, randomized pauses, idle wander, view drift, and unified idle cadence.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="how-it-works" aria-labelledby="controls-title">
+      <div class="container">
+        <h2 id="controls-title" class="section-title">Controls</h2>
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">B</span>
+            <h3 class="step-title">Start / Stop</h3>
+            <p class="step-desc">Toggles the bot on and off. The menu can configure tasks without launching them.</p>
+          </div>
+          <div class="step-sep" aria-hidden="true"></div>
+          <div class="step">
+            <span class="step-num">G</span>
+            <h3 class="step-title">Set Home</h3>
+            <p class="step-desc">Marks the current position as home. The bot returns here when idle or after farming.</p>
+          </div>
+          <div class="step-sep" aria-hidden="true"></div>
+          <div class="step">
+            <span class="step-num">U</span>
+            <h3 class="step-title">Menu</h3>
+            <p class="step-desc">Opens the ArgusBot settings menu. Toggle farming, mining, idle mode, and environment mode here.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-section" aria-labelledby="cta-title">
+      <div class="container">
+        <h2 id="cta-title" class="cta-title">Ready to automate?</h2>
+        <a href="/download/argusbot-0.2.0.jar" class="btn btn-primary btn-lg">Download ArgusBot</a>
+        <p style="margin-top: 16px; color: var(--text-secondary); font-size: 14px;">
+          Requires Fabric Loader <strong>0.19.5</strong> and Minecraft <strong>26.2</strong>.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer" role="contentinfo">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <a href="/" class="nav-logo" aria-label="ARGUS Home">
+          <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+          <span class="logo-text">ARGUS</span>
+        </a>
+        <p class="footer-tagline">Free Minecraft tools for everyone.</p>
+      </div>
+      <div class="footer-links">
+        <a href="/" target="_blank" rel="noopener noreferrer">Home</a>
+        <a href="/download">Download</a>
+      </div>
+      <p class="footer-legal">Minecraft is a trademark of Mojang Studios. ARGUS is an independent project.</p>
+    </div>
+  </footer>
+
+  <script src="/js/main.js"></script>
+</body>
+</html>
